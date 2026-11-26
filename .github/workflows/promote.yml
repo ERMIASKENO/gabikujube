@@ -67,7 +67,7 @@ jobs:
           TARGET: ${{ inputs.target }}
           SERVICES: ${{ inputs.services || 'all' }}
           SOURCE: ${{ inputs.source || 'git' }}
-        run: scripts/ci/promotion-plan.sh >>"${GITHUB_OUTPUT}"
+        run: bash scripts/ci/promotion-plan.sh >>"${GITHUB_OUTPUT}"
 
   copy-image:
     needs: plan
@@ -128,4 +128,4 @@ jobs:
           TARGET: ${{ inputs.target }}
           ITEMS: ${{ needs.plan.outputs.items }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: scripts/ci/bump-gitops.sh
+        run: bash scripts/ci/bump-gitops.sh

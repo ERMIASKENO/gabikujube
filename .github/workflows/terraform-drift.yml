@@ -51,4 +51,4 @@ jobs:
       - name: open / update / close drift issue
         env:
           CODE: ${{ steps.plan.outputs.code }}
-        run: scripts/ci/drift-issue.sh infra/terraform/stacks/platform/drift.txt
+        run: bash scripts/ci/drift-issue.sh infra/terraform/stacks/platform/drift.txt

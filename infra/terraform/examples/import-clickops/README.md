@@ -37,7 +37,7 @@ resources, replace hard-coded IDs with references, move into modules.
 **b) Native `import` blocks + config generation (precise, reviewable)**
 
 ```hcl
-# imports.tf
+# imports.tf  (example file: imports.tf.example - copy it into a real stack to use)
 import {
   to = azurerm_dns_zone.public
   id = "/subscriptions/<sub>/resourceGroups/rg-dns/providers/Microsoft.Network/dnsZones/example.com"

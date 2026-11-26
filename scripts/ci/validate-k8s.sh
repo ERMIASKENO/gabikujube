@@ -41,7 +41,7 @@ kubeconform -strict -summary -output pretty \
   "${OUT}"/*.yaml
 
 log_info "checking generated Argo CD manifests are up to date"
-"${ROOT}/scripts/ops/render-cluster-apps.sh" >/dev/null 2>&1
+bash "${ROOT}/scripts/ops/render-cluster-apps.sh" >/dev/null 2>&1
 if ! git -C "${ROOT}" diff --quiet -- gitops/clusters gitops/bootstrap; then
   git -C "${ROOT}" --no-pager diff --stat -- gitops/clusters gitops/bootstrap
   die "gitops/clusters is stale: run scripts/ops/render-cluster-apps.sh and commit"

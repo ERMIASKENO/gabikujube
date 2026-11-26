@@ -66,9 +66,7 @@ jobs:
       - name: yamllint
         run: pipx run yamllint -c .yamllint.yaml .
       - name: bash script tests (bats)
-        run: |
-          sudo apt-get install -y --no-install-recommends bats >/dev/null
-          bats scripts/tests
+        run: npx --yes bats@1.11.1 scripts/tests
 
   build:
     needs: changes
@@ -99,7 +97,7 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup-k8s-tools
       - name: helm lint/template + kustomize build + kubeconform + generated-file drift
-        run: scripts/ci/validate-k8s.sh
+        run: bash scripts/ci/validate-k8s.sh
 
   promote-dev:
     needs: build
