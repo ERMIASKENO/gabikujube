@@ -1,0 +1,17 @@
+# Managed by CI: .github/workflows/promote.yml rewrites the image block.
+image:
+  repository: acrshopsphereprod.azurecr.io/shopsphere/notification
+  tag: "0f3c2a9"
+  digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+serviceAccount:
+  workloadIdentityClientId: "<notification-client-id>"
+env:
+  SERVICEBUS_FQDN: sb-shopsphere-prod.servicebus.windows.net
+autoscaling:
+  keda:
+    serviceBus:
+      namespace: sb-shopsphere-prod
+      topic: order-events
+      subscription: notification
+      messageCount: "20"
+      identityClientId: "<keda-client-id>"

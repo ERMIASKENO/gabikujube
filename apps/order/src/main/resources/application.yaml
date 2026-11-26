@@ -1,0 +1,40 @@
+server:
+  port: 8080
+  shutdown: graceful          # stop accepting, finish in-flight requests on SIGTERM
+spring:
+  application:
+    name: order
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
+  threads:
+    virtual:
+      enabled: true           # Java 21 virtual threads for blocking I/O fan-out
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true         # /actuator/health/liveness and /readiness
+  metrics:
+    tags:
+      service: order
+
+services:
+  cart: ${CART_URL:http://cart:8080}
+  catalog: ${PRODUCT_CATALOG_URL:http://product-catalog:8080}
+  inventory: ${INVENTORY_URL:http://inventory:8080}
+  shipping: ${SHIPPING_URL:http://shipping:8080}
+  payment: ${PAYMENT_URL:http://payment:8080}
+
+servicebus:
+  fqdn: ${SERVICEBUS_FQDN:}
+  topic: ${SERVICEBUS_TOPIC:order-events}
+
+logging:
+  structured:
+    format:
+      console: ecs            # JSON logs (Spring Boot 3.4+) -> Loki

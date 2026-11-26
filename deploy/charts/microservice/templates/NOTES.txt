@@ -1,0 +1,10 @@
+{{ include "ms.name" . }} ({{ .Values.rollout.strategy }}) deployed to {{ .Release.Namespace }}.
+
+Watch the rollout:
+  kubectl argo rollouts get rollout {{ include "ms.name" . }} -n {{ .Release.Namespace }} --watch
+{{- if eq .Values.rollout.strategy "blueGreen" }}
+Promote green after checks pass:
+  kubectl argo rollouts promote {{ include "ms.name" . }} -n {{ .Release.Namespace }}
+{{- end }}
+Abort and return to stable:
+  kubectl argo rollouts abort {{ include "ms.name" . }} -n {{ .Release.Namespace }}

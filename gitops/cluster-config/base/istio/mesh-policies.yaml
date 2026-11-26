@@ -1,0 +1,36 @@
+# Mesh-wide mTLS: plaintext between pods is rejected everywhere.
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: istio-system
+spec:
+  mtls:
+    mode: STRICT
+---
+# Default-deny at L7 for the app namespace. Each service's chart release
+# adds an ALLOW policy listing its legitimate callers.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-nothing
+  namespace: shop
+spec: {}
+---
+# Telemetry API: traces to the OTel pipeline (Alloy -> Tempo) and Envoy
+# access logs (-> Loki). Sampling is patched per environment.
+apiVersion: telemetry.istio.io/v1
+kind: Telemetry
+metadata:
+  name: mesh-default
+  namespace: istio-system
+spec:
+  tracing:
+    - providers:
+        - name: otel-tracing
+      randomSamplingPercentage: 10.0
+  accessLogging:
+    - providers:
+        - name: envoy
+      filter:
+        expression: "response.code >= 400 || response.duration > 1000"   # log errors and slow calls only

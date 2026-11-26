@@ -1,0 +1,5 @@
+istio:
+  allowedCallers: [order]
+resources:
+  requests: { cpu: 50m, memory: 32Mi }
+  limits: { memory: 64Mi }

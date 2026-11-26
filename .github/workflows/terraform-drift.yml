@@ -1,0 +1,54 @@
+# Nightly drift detection: someone changed something in the portal, or a
+# platform default moved. Opens (or updates) one issue per environment;
+# closes it automatically once code and reality match again.
+name: terraform-drift
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    if: vars.AZURE_TENANT_ID != ''
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [dev, staging, prod]
+    runs-on: ${{ matrix.env == 'dev' && 'ubuntu-24.04' || format('infra-{0}', matrix.env) }}
+    timeout-minutes: 30
+    environment: ${{ matrix.env }}-plan
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      ENV: ${{ matrix.env }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.17.2
+          terraform_wrapper: false
+      - name: plan (detect drift)
+        id: plan
+        working-directory: infra/terraform/stacks/platform
+        run: |
+          terraform init -backend-config="envs/${ENV}.backend.hcl"
+          set +e
+          terraform plan -var-file="envs/${ENV}.tfvars" -detailed-exitcode -no-color -lock=false > drift.txt 2>&1
+          echo "code=$?" >>"${GITHUB_OUTPUT}"
+      - name: open / update / close drift issue
+        env:
+          CODE: ${{ steps.plan.outputs.code }}
+        run: scripts/ci/drift-issue.sh infra/terraform/stacks/platform/drift.txt

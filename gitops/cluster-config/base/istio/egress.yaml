@@ -1,0 +1,33 @@
+# Mesh egress is REGISTRY_ONLY (istiod values): sidecars may only reach
+# in-mesh services and the external hosts registered here. A compromised pod
+# can't exfiltrate to an arbitrary host through its sidecar.
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: azure-entra-id
+  namespace: istio-system
+spec:
+  hosts: ["login.microsoftonline.com"]
+  location: MESH_EXTERNAL
+  resolution: DNS
+  ports:
+    - { number: 443, name: tls, protocol: TLS }
+---
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: azure-paas
+  namespace: istio-system
+spec:
+  hosts:
+    - "*.servicebus.windows.net"
+    - "*.redis.azure.net"
+    - "*.vault.azure.net"
+    - "*.postgres.database.azure.com"
+  location: MESH_EXTERNAL
+  resolution: NONE        # wildcard hosts: let the app's DNS (private endpoint IP) decide
+  ports:
+    - { number: 443,   name: tls-https, protocol: TLS }
+    - { number: 5671,  name: tls-amqp,  protocol: TLS }
+    - { number: 10000, name: tls-redis, protocol: TLS }
+    - { number: 5432,  name: tcp-pg,    protocol: TCP }

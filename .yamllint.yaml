@@ -1,0 +1,17 @@
+extends: default
+ignore: |
+  **/node_modules/**
+  **/.venv/**
+  deploy/charts/*/templates/**
+  apps/frontend/dist/**
+rules:
+  line-length: disable
+  document-start: disable
+  truthy: { check-keys: false }
+  comments: { min-spaces-from-content: 1 }
+  braces: { max-spaces-inside: 1 }
+  brackets: { max-spaces-inside: 1 }
+  indentation: { spaces: consistent, indent-sequences: whatever }
+  # column-aligned tables (components.yaml, compose) are easier to review
+  colons: { max-spaces-after: -1 }
+  commas: { max-spaces-after: -1 }

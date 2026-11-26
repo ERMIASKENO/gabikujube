@@ -1,0 +1,38 @@
+# Composite action: pinned Kubernetes CLI toolchain, cached in the tool cache.
+# One place to bump versions for every workflow that validates manifests.
+name: setup-k8s-tools
+description: Install pinned helm, kustomize, kubeconform and yq
+inputs:
+  helm-version:
+    default: v4.3.2
+  kustomize-version:
+    default: v5.8.3
+  kubeconform-version:
+    default: v0.8.0
+  yq-version:
+    default: v4.54.3
+runs:
+  using: composite
+  steps:
+    - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+      with:
+        version: ${{ inputs.helm-version }}
+    - id: cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.local/k8s-tools
+        key: k8s-tools-${{ runner.os }}-${{ inputs.kustomize-version }}-${{ inputs.kubeconform-version }}-${{ inputs.yq-version }}
+    - if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        KUSTOMIZE: ${{ inputs.kustomize-version }}
+        KUBECONFORM: ${{ inputs.kubeconform-version }}
+        YQ: ${{ inputs.yq-version }}
+      run: |
+        set -euo pipefail
+        d=~/.local/k8s-tools; mkdir -p "$d"
+        curl -fsSL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${KUSTOMIZE}/kustomize_${KUSTOMIZE}_linux_amd64.tar.gz" | tar xz -C "$d"
+        curl -fsSL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM}/kubeconform-linux-amd64.tar.gz" | tar xz -C "$d" kubeconform
+        curl -fsSL -o "$d/yq" "https://github.com/mikefarah/yq/releases/download/${YQ}/yq_linux_amd64" && chmod +x "$d/yq"
+    - shell: bash
+      run: echo "${HOME}/.local/k8s-tools" >>"${GITHUB_PATH}"

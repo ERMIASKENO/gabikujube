@@ -1,0 +1,55 @@
+#cloud-config
+# First-boot configuration for the ops VM. Everything here is idempotent and
+# the same scripts are linted/tested in CI (scripts/linux/*).
+package_update: true
+package_upgrade: true
+packages:
+  - ca-certificates
+  - curl
+  - jq
+  - unzip
+  - git
+  - auditd
+  - fail2ban
+  - ufw
+  - unattended-upgrades
+  - prometheus-node-exporter
+
+write_files:
+  - path: /opt/shopsphere/harden-server.sh
+    permissions: "0750"
+    encoding: b64
+    content: ${base64encode(harden_script)}
+  - path: /opt/shopsphere/install-runner.sh
+    permissions: "0750"
+    encoding: b64
+    content: ${base64encode(runner_script)}
+  - path: /opt/shopsphere/health-check.sh
+    permissions: "0755"
+    encoding: b64
+    content: ${base64encode(health_script)}
+  - path: /etc/systemd/system/shopsphere-health.service
+    content: |
+      [Unit]
+      Description=ShopSphere host health check (writes node_exporter textfile metrics)
+      [Service]
+      Type=oneshot
+      ExecStart=/opt/shopsphere/health-check.sh --textfile /var/lib/prometheus/node-exporter/shopsphere.prom
+  - path: /etc/systemd/system/shopsphere-health.timer
+    content: |
+      [Unit]
+      Description=Run ShopSphere health check every minute
+      [Timer]
+      OnBootSec=60
+      OnUnitActiveSec=60
+      [Install]
+      WantedBy=timers.target
+
+runcmd:
+  - [bash, -c, "curl -fsSL https://aka.ms/InstallAzureCLIDeb | bash"]
+  - [bash, -c, "az aks install-cli"]   # kubectl + kubelogin
+  - [/opt/shopsphere/harden-server.sh]
+  - [systemctl, daemon-reload]
+  - [systemctl, enable, --now, shopsphere-health.timer]
+  # Runner registration needs a short-lived token, so it is done by the
+  # bootstrap pipeline: /opt/shopsphere/install-runner.sh --org ... --labels infra

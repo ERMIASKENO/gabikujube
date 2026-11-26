@@ -1,0 +1,55 @@
+# Under node pressure the scheduler evicts batch first and checkout last.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: shop-critical
+value: 100000
+globalDefault: false
+description: Checkout path (order, payment). Preempts lower priorities.
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: shop-standard
+value: 50000
+globalDefault: false
+description: Default for customer-facing services.
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: shop-batch
+value: 1000
+globalDefault: false
+preemptionPolicy: Never
+description: Jobs/CronJobs. Never preempts other pods.
+---
+# Namespace guard-rails: a runaway HPA or a bad values file cannot eat the cluster
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: shop-quota
+  namespace: shop
+spec:
+  hard:
+    requests.cpu: "40"
+    requests.memory: 80Gi
+    limits.memory: 120Gi
+    pods: "400"
+    services.loadbalancers: "0"   # nothing in shop may create its own public/private LB
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: shop-defaults
+  namespace: shop
+spec:
+  limits:
+    - type: Container
+      defaultRequest:
+        cpu: 50m
+        memory: 64Mi
+      default:
+        memory: 256Mi
+      max:
+        memory: 4Gi

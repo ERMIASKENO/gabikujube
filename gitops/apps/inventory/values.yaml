@@ -1,0 +1,15 @@
+istio:
+  allowedCallers: [order]
+secretEnv:
+  - { name: DATABASE_URL, key: DATABASE_URL }
+externalSecret:
+  enabled: true
+  data:
+    - { secretKey: DATABASE_URL, remoteKey: inventory-database-url }
+migrationJob:
+  enabled: true
+  command: ["python", "-m", "app.migrate"]
+cronJobs:
+  - name: reconcile
+    schedule: "17 3 * * *"
+    command: ["python", "-m", "app.reconcile"]

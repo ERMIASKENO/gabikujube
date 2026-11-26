@@ -1,0 +1,77 @@
+# dev overlay: only the values that genuinely differ per environment.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+patches:
+  - target: { kind: Gateway, name: shop-gateway }
+    patch: |-
+      - op: replace
+        path: /spec/listeners/0/hostname
+        value: dev.shop.example.com
+      - op: replace
+        path: /spec/infrastructure/annotations/service.beta.kubernetes.io~1azure-load-balancer-ipv4
+        value: 10.10.15.250
+  - target: { kind: Certificate, name: shop-tls }
+    patch: |-
+      - op: replace
+        path: /spec/dnsNames/0
+        value: dev.shop.example.com
+  - target: { kind: RequestAuthentication, name: shop-jwt }
+    patch: |-
+      - op: replace
+        path: /spec/jwtRules/0/issuer
+        value: https://dev.shop.example.com
+  - target: { kind: ClusterIssuer, name: letsencrypt }
+    patch: |-
+      - op: replace
+        path: /spec/acme/solvers/0/dns01/azureDNS/subscriptionID
+        value: 00000000-0000-0000-0000-000000000000
+      - op: replace
+        path: /spec/acme/solvers/0/dns01/azureDNS/managedIdentity/clientID
+        value: "<dev-cert-manager-client-id>"
+  - target: { kind: ClusterSecretStore, name: azure-keyvault }
+    patch: |-
+      - op: replace
+        path: /spec/provider/azurekv/vaultUrl
+        value: https://kv-shopspheredev.vault.azure.net
+  - target: { kind: NetworkPolicy, name: allow-azure-paas }
+    patch: |-
+      - op: replace
+        path: /spec/egress/0/to/0/ipBlock/cidr
+        value: 10.10.16.0/24
+      - op: replace
+        path: /spec/egress/0/to/1/ipBlock/cidr
+        value: 10.10.18.0/24
+  - target: { kind: Telemetry, name: mesh-default }
+    patch: |-
+      - op: replace
+        path: /spec/tracing/0/randomSamplingPercentage
+        value: 100.0
+  - target: { kind: ResourceQuota, name: shop-quota }
+    patch: |-
+      - op: replace
+        path: /spec/hard/requests.cpu
+        value: "12"
+      - op: replace
+        path: /spec/hard/requests.memory
+        value: 24Gi
+  # dev: report unsigned images instead of blocking (local experiments)
+  - target: { kind: ClusterPolicy, name: verify-shopsphere-images }
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/verifyImages/0/failureAction
+        value: Audit
+  # dev runs a single gateway replica
+  - target: { kind: HorizontalPodAutoscaler, name: shop-gateway-istio }
+    patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 1
+  - target: { kind: PodDisruptionBudget, name: shop-gateway-istio }
+    patch: |-
+      - op: replace
+        path: /spec/minAvailable
+        value: 0

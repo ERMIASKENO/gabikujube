@@ -1,0 +1,24 @@
+# order: JVM service, checkout orchestrator, publishes OrderPlaced events.
+priorityClassName: shop-critical
+gateway:
+  enabled: true
+  paths: ["/api/orders"]
+http:
+  timeout: 10s        # fan-out to 5 services
+metrics:
+  path: /actuator/prometheus
+probes:
+  startup:   { path: /actuator/health/liveness,  periodSeconds: 3, failureThreshold: 60 }
+  liveness:  { path: /actuator/health/liveness,  periodSeconds: 10, failureThreshold: 3 }
+  readiness: { path: /actuator/health/readiness, periodSeconds: 5,  failureThreshold: 2 }
+resources:
+  requests: { cpu: 250m, memory: 512Mi }
+  limits: { memory: 768Mi }
+terminationGracePeriodSeconds: 45
+env:
+  CART_URL: http://cart:8080
+  PRODUCT_CATALOG_URL: http://product-catalog:8080
+  INVENTORY_URL: http://inventory:8080
+  SHIPPING_URL: http://shipping:8080
+  PAYMENT_URL: http://payment:8080
+  SERVICEBUS_TOPIC: order-events

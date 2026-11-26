@@ -1,0 +1,172 @@
+# Infrastructure pipeline.
+#   PR:   fmt, tflint, IaC security scan, module tests, plan for every env
+#         (posted as a PR comment)
+#   main: plan -> [approval] -> apply the SAME saved plan, dev -> staging -> prod
+#
+# Identities: *-plan environments use a read-only identity (Reader + state
+# blob access). Apply environments use a deploy identity and need approval.
+name: terraform
+
+on:
+  pull_request:
+    paths: ["infra/terraform/**", "scripts/linux/**", ".github/workflows/terraform.yml"]
+  push:
+    branches: [main]
+    paths: ["infra/terraform/**", "scripts/linux/**", ".github/workflows/terraform.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  TF_VERSION: 1.17.2
+  WORKDIR: infra/terraform/stacks/platform
+
+jobs:
+  static:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - run: terraform fmt -check -recursive -diff infra/terraform
+      - name: validate (providers downloaded, no backend, no Azure login needed)
+        run: |
+          for d in infra/terraform/stacks/platform infra/terraform/stacks/github; do
+            terraform -chdir="$d" init -backend=false -input=false >/dev/null
+            terraform -chdir="$d" validate
+          done
+      - uses: terraform-linters/setup-tflint@6ffdbaa3be476b3431f7275c26966ef32ff60337 # v6.3.2
+      - run: tflint --init && tflint --recursive --config "$PWD/.tflint.hcl"
+      - name: Module tests (mocked providers, no cloud access)
+        working-directory: infra/terraform/modules/network
+        run: terraform init -backend=false && terraform test
+      - name: IaC misconfiguration scan (report-only until the baseline is triaged)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: config
+          scan-ref: infra/terraform
+          format: sarif
+          output: trivy-iac.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+      - if: always() && hashFiles('trivy-iac.sarif') != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
+        with:
+          sarif_file: trivy-iac.sarif
+          category: trivy-iac
+
+  plan:
+    needs: static
+    # Simulation mode: skip cloud plans until Azure OIDC is configured
+    if: vars.AZURE_TENANT_ID != ''
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [dev, staging, prod]
+    # staging/prod have private endpoints: plan from runners inside the VNet
+    runs-on: ${{ matrix.env == 'dev' && 'ubuntu-24.04' || format('infra-{0}', matrix.env) }}
+    timeout-minutes: 30
+    environment: ${{ matrix.env }}-plan
+    concurrency:
+      group: tf-plan-${{ matrix.env }}-${{ github.ref }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      ENV: ${{ matrix.env }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - name: init
+        working-directory: ${{ env.WORKDIR }}
+        # after the first init, commit .terraform.lock.hcl and add -lockfile=readonly
+        run: terraform init -backend-config="envs/${ENV}.backend.hcl"
+      - name: plan
+        id: plan
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          set +e
+          terraform plan -var-file="envs/${ENV}.tfvars" -out=tfplan -detailed-exitcode -lock-timeout=5m
+          code=$?
+          set -e
+          [[ ${code} -eq 1 ]] && exit 1
+          echo "changes=$([[ ${code} -eq 2 ]] && echo true || echo false)" >>"${GITHUB_OUTPUT}"
+          terraform show -no-color tfplan > plan.txt
+          {
+            echo "## Terraform plan: ${ENV}"
+            echo '```'
+            grep -E '^(Plan:|No changes)' plan.txt || true
+            echo '```'
+            echo "<details><summary>full plan</summary>"
+            echo
+            echo '```hcl'
+            head -c 60000 plan.txt
+            echo '```'
+            echo "</details>"
+          } > summary.md
+          cat summary.md >>"${GITHUB_STEP_SUMMARY}"
+      - name: Comment plan on PR (upsert)
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          SUMMARY_FILE: ${{ env.WORKDIR }}/summary.md
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync(process.env.SUMMARY_FILE, 'utf8');
+            const marker = `<!-- tf-plan-${process.env.ENV} -->`;
+            const { data: comments } = await github.rest.issues.listComments({ ...context.repo, issue_number: context.issue.number });
+            const existing = comments.find(c => c.body.includes(marker));
+            const payload = { ...context.repo, body: `${marker}\n${body}` };
+            if (existing) await github.rest.issues.updateComment({ ...payload, comment_id: existing.id });
+            else await github.rest.issues.createComment({ ...payload, issue_number: context.issue.number });
+      - name: Upload saved plan
+        if: github.event_name != 'pull_request' && steps.plan.outputs.changes == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tfplan-${{ matrix.env }}
+          path: ${{ env.WORKDIR }}/tfplan
+          retention-days: 3
+    outputs:
+      changes: ${{ steps.plan.outputs.changes }}
+
+  apply-dev:
+    needs: plan
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/_terraform-apply.yml
+    with: { env: dev, runner: ubuntu-24.04 }
+    permissions: { contents: read, id-token: write }
+
+  apply-staging:
+    needs: apply-dev
+    uses: ./.github/workflows/_terraform-apply.yml
+    with: { env: staging, runner: infra-staging }
+    permissions: { contents: read, id-token: write }
+
+  apply-prod:
+    needs: apply-staging
+    uses: ./.github/workflows/_terraform-apply.yml
+    with: { env: prod, runner: infra-prod }
+    permissions: { contents: read, id-token: write }

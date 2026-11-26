@@ -1,0 +1,188 @@
+{{- $name := include "ms.name" . -}}
+{{- $s := .Values.rollout.strategy -}}
+apiVersion: {{ include "ms.workloadApiVersion" . }}
+kind: {{ include "ms.workloadKind" . }}
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "ms.labels" . | nindent 4 }}
+spec:
+  {{- if not (or .Values.autoscaling.hpa.enabled .Values.autoscaling.keda.enabled) }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      {{- include "ms.selectorLabels" . | nindent 6 }}
+  {{- if eq $s "rolling" }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 0
+  {{- else if eq $s "canary" }}
+  strategy:
+    canary:
+      stableService: {{ $name }}-stable
+      canaryService: {{ $name }}-canary
+      dynamicStableScale: true
+      abortScaleDownDelaySeconds: 30
+      trafficRouting:
+        plugins:
+          argoproj-labs/gatewayAPI:
+            httpRoute: {{ $name }}
+            namespace: {{ .Release.Namespace }}
+      # Background analysis runs from the first step; any failure aborts and
+      # shifts 100% of traffic back to stable automatically.
+      analysis:
+        startingStep: 1
+        templates:
+          - templateName: success-rate
+            clusterScope: true
+          - templateName: latency-p95
+            clusterScope: true
+        args:
+          - name: service
+            value: {{ $name }}-canary
+          - name: namespace
+            value: {{ .Release.Namespace }}
+      steps:
+        {{- toYaml .Values.rollout.canary.steps | nindent 8 }}
+  {{- else if eq $s "blueGreen" }}
+  strategy:
+    blueGreen:
+      activeService: {{ $name }}-stable
+      previewService: {{ $name }}-preview
+      autoPromotionEnabled: {{ .Values.rollout.blueGreen.autoPromotionEnabled }}
+      scaleDownDelaySeconds: {{ .Values.rollout.blueGreen.scaleDownDelaySeconds }}
+      previewReplicaCount: {{ .Values.rollout.blueGreen.previewReplicaCount }}
+      # Green must pass smoke tests before anyone can promote it
+      prePromotionAnalysis:
+        templates:
+          - templateName: smoke-test
+            clusterScope: true
+        args:
+          - name: url
+            value: http://{{ $name }}-preview.{{ .Release.Namespace }}.svc.cluster.local:8080{{ .Values.probes.readiness.path }}
+      # ...and keep passing after the switch, or Rollouts flips back to blue
+      postPromotionAnalysis:
+        templates:
+          - templateName: success-rate
+            clusterScope: true
+        args:
+          - name: service
+            value: {{ $name }}-stable
+          - name: namespace
+            value: {{ .Release.Namespace }}
+  {{- end }}
+  template:
+    metadata:
+      labels:
+        {{- include "ms.selectorLabels" . | nindent 8 }}
+        app: {{ $name }}
+        version: {{ .Values.image.tag | default "unknown" | trunc 63 | quote }}
+        {{- if .Values.serviceAccount.workloadIdentityClientId }}
+        azure.workload.identity/use: "true"
+        {{- end }}
+      annotations:
+        checksum/env: {{ toJson .Values.env | sha256sum }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.containerPort | quote }}
+        prometheus.io/path: {{ .Values.metrics.path | quote }}
+        {{- if .Values.istio.enabled }}
+        proxy.istio.io/config: '{"holdApplicationUntilProxyStarts": true}'
+        {{- end }}
+        {{- if .Values.externalSecret.enabled }}
+        reloader.stakater.com/auto: "true"
+        {{- end }}
+    spec:
+      serviceAccountName: {{ $name }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountToken }}
+      priorityClassName: {{ .Values.priorityClassName }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "ms.selectorLabels" . | nindent 14 }}
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "ms.selectorLabels" . | nindent 14 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: app
+          image: {{ include "ms.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.command }}
+          command:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.containerPort }}
+              protocol: TCP
+          env:
+            - name: PORT
+              value: {{ .Values.containerPort | quote }}
+            - name: APP_VERSION
+              value: {{ .Values.image.tag | default "unknown" | quote }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            {{- range $k, $v := .Values.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+            {{- range .Values.secretEnv }}
+            - name: {{ .name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $name }}-secrets
+                  key: {{ .key }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          startupProbe:
+            httpGet: { path: {{ .Values.probes.startup.path }}, port: http }
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          livenessProbe:
+            httpGet: { path: {{ .Values.probes.liveness.path }}, port: http }
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet: { path: {{ .Values.probes.readiness.path }}, port: http }
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: {{ .Values.preStopSleepSeconds }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

@@ -1,0 +1,20 @@
+# Ephemeral, autoscaled self-hosted runners: one fresh pod per job, 0 when idle.
+# Workflows target them with `runs-on: shopsphere-aks`.
+githubConfigUrl: https://github.com/shopsphere
+githubConfigSecret: arc-github-app       # GitHub App creds, synced from Key Vault by ESO
+runnerScaleSetName: shopsphere-aks
+minRunners: 0
+maxRunners: 20
+runnerGroup: aks-runners                 # enterprise runner group, restricted to selected repos
+containerMode:
+  type: kubernetes                       # job containers run as separate pods, no privileged DinD
+  kubernetesModeWorkVolumeClaim:
+    accessModes: ["ReadWriteOnce"]
+    storageClassName: managed-csi
+    resources: { requests: { storage: 10Gi } }
+template:
+  metadata:
+    labels:
+      azure.workload.identity/use: "true"   # runners get Azure access via workload identity, not secrets
+  spec:
+    serviceAccountName: arc-runner

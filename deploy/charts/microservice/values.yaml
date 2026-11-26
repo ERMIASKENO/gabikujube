@@ -1,0 +1,133 @@
+# Defaults are production-safe; services override only what differs.
+nameOverride: ""
+
+image:
+  repository: ""      # e.g. acrshopsphereprod.azurecr.io/shopsphere/cart
+  tag: ""             # git sha (human readable)
+  digest: ""          # sha256:... (immutable; what actually gets pulled)
+  pullPolicy: IfNotPresent
+
+replicaCount: 2
+containerPort: 8080
+
+command: []
+args: []
+
+# Plain environment variables (map, rendered in sorted order)
+env: {}
+# Env vars sourced from the Kubernetes Secret produced by ExternalSecret
+secretEnv: []        # - { name: DATABASE_URL, key: DATABASE_URL }
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 256Mi    # memory limit only: CPU limits cause CFS throttling & tail latency
+
+probes:
+  startup:   { path: /healthz, periodSeconds: 2, failureThreshold: 30 }
+  liveness:  { path: /healthz, periodSeconds: 10, failureThreshold: 3 }
+  readiness: { path: /readyz,  periodSeconds: 5,  failureThreshold: 2 }
+
+metrics:
+  path: /metrics     # merged into the sidecar's :15020/stats/prometheus by Istio
+
+serviceAccount:
+  # Entra Workload Identity: client id of the UAMI federated to this SA
+  workloadIdentityClientId: ""
+  automountToken: false
+
+podSecurityContext:
+  runAsNonRoot: true
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+terminationGracePeriodSeconds: 35
+preStopSleepSeconds: 5        # let endpoints/Envoy drop the pod before SIGTERM work starts
+priorityClassName: shop-standard
+nodeSelector:
+  shopsphere.io/pool: apps
+tolerations: []
+
+# --------------------------------------------------------------- autoscaling
+autoscaling:
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+  keda:
+    enabled: false
+    minReplicas: 0
+    maxReplicas: 20
+    serviceBus: {}   # { namespace: sb-xxx, topic: order-events, subscription: x, messageCount: "20", identityClientId: "" }
+
+pdb:
+  enabled: true
+  maxUnavailable: 1
+
+# --------------------------------------------------------------- traffic
+gateway:
+  enabled: false            # expose through the edge Gateway?
+  name: shop-gateway
+  namespace: istio-ingress
+  paths: []                 # PathPrefix list, e.g. ["/api/products"]
+
+http:
+  timeout: 5s
+
+istio:
+  enabled: true
+  allowedCallers: []        # service accounts in the same namespace allowed to call us
+  outlierDetection:
+    consecutive5xxErrors: 5
+    interval: 10s
+    baseEjectionTime: 30s
+    maxEjectionPercent: 50
+
+networkPolicy:
+  enabled: true
+
+# --------------------------------------------------------------- delivery
+rollout:
+  strategy: canary          # canary | blueGreen | rolling
+  canary:
+    steps:
+      - setWeight: 10
+      - pause: { duration: 2m }
+      - setWeight: 25
+      - pause: { duration: 3m }
+      - setWeight: 50
+      - pause: { duration: 5m }
+      - setWeight: 100
+  blueGreen:
+    autoPromotionEnabled: false   # a human (or the promote workflow) flips traffic
+    scaleDownDelaySeconds: 600    # keep blue warm 10 min for instant rollback
+    previewReplicaCount: 2
+
+migrationJob:
+  enabled: false
+  command: []
+
+cronJobs: []
+# - name: reconcile
+#   schedule: "17 3 * * *"
+#   command: ["python", "-m", "app.reconcile"]
+
+externalSecret:
+  enabled: false
+  refreshInterval: 1h
+  data: []   # - { secretKey: DATABASE_URL, remoteKey: inventory-database-url }
+
+slo:
+  enabled: true
+  errorBudgetRatio: 0.01    # 99% availability SLO => 1% of requests may fail
+  latencyP95Ms: 500

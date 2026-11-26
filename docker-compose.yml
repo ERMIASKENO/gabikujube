@@ -1,0 +1,61 @@
+# Local dev parity: the same images CI builds, wired the way the Istio
+# Gateway HTTPRoutes wire them in AKS (local-gateway mirrors those routes).
+#   docker compose up --build   ->  http://localhost:8080
+name: shopsphere
+
+x-svc: &svc
+  restart: unless-stopped
+  environment: &env
+    LOG_LEVEL: debug
+  read_only: true
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: ["ALL"]
+
+services:
+  local-gateway:
+    image: nginxinc/nginx-unprivileged:1.29-alpine
+    ports: ["8080:8080"]
+    volumes: ["./deploy/local/gateway.conf:/etc/nginx/conf.d/default.conf:ro"]
+    depends_on: [frontend, product-catalog, cart, order, user, recommendation, inventory, shipping, payment]
+
+  frontend:        { <<: *svc, build: { context: apps/frontend, target: runtime }, read_only: false }
+  product-catalog: { <<: *svc, build: { context: apps/product-catalog, target: runtime } }
+  payment:         { <<: *svc, build: { context: apps/payment, target: runtime } }
+  shipping:        { <<: *svc, build: { context: apps/shipping, target: runtime } }
+  user:            { <<: *svc, build: { context: apps/user, target: runtime } }
+  recommendation:  { <<: *svc, build: { context: apps/recommendation, target: runtime } }
+  notification:    { <<: *svc, build: { context: apps/notification, target: runtime } }
+
+  cart:
+    <<: *svc
+    build: { context: apps/cart, target: runtime }
+    environment: { <<: *env, REDIS_URL: "redis://redis:6379" }
+    depends_on: [redis]
+
+  inventory:
+    <<: *svc
+    build: { context: apps/inventory, target: runtime }
+    environment: { <<: *env, DATABASE_URL: "postgresql://shop:shop@postgres:5432/inventory" }
+    depends_on:
+      inventory-migrate: { condition: service_completed_successfully }
+
+  # Same pattern as the Argo CD PreSync migration Job in Kubernetes
+  inventory-migrate:
+    build: { context: apps/inventory, target: runtime }
+    command: ["python", "-m", "app.migrate"]
+    environment: { DATABASE_URL: "postgresql://shop:shop@postgres:5432/inventory" }
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  order:
+    <<: *svc
+    build: { context: apps/order, target: runtime }
+    read_only: false
+    depends_on: [cart, product-catalog, inventory, shipping, payment]
+
+  redis:
+    image: redis:7-alpine
+  postgres:
+    image: postgres:17-alpine
+    environment: { POSTGRES_USER: shop, POSTGRES_PASSWORD: shop, POSTGRES_DB: inventory }
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U shop"], interval: 3s, retries: 20 }

@@ -1,0 +1,99 @@
+{{- $name := include "ms.name" . -}}
+{{- define "ms.jobPod" -}}
+{{- $root := index . 0 -}}
+{{- $cmd := index . 1 -}}
+metadata:
+  labels:
+    # NOT the service selector labels, or Services would route traffic to job pods
+    app.kubernetes.io/name: {{ include "ms.name" $root }}-job
+    app.kubernetes.io/instance: {{ $root.Release.Name }}
+    app.kubernetes.io/component: job
+  annotations:
+    # Talks to PaaS (PostgreSQL) only; no mesh needed and no sidecar to keep alive
+    sidecar.istio.io/inject: "false"
+spec:
+  restartPolicy: Never
+  serviceAccountName: {{ include "ms.name" $root }}
+  automountServiceAccountToken: false
+  priorityClassName: shop-batch
+  securityContext:
+    {{- toYaml $root.Values.podSecurityContext | nindent 4 }}
+  tolerations:
+    - key: kubernetes.azure.com/scalesetpriority   # batch may land on cheap spot nodes
+      operator: Equal
+      value: spot
+      effect: NoSchedule
+  containers:
+    - name: job
+      image: {{ include "ms.image" $root }}
+      command:
+        {{- toYaml $cmd | nindent 8 }}
+      env:
+        {{- range $k, $v := $root.Values.env }}
+        - name: {{ $k }}
+          value: {{ $v | quote }}
+        {{- end }}
+        {{- range $root.Values.secretEnv }}
+        - name: {{ .name }}
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "ms.name" $root }}-secrets
+              key: {{ .key }}
+        {{- end }}
+      resources:
+        requests: { cpu: 50m, memory: 128Mi }
+        limits: { memory: 256Mi }
+      securityContext:
+        {{- toYaml $root.Values.securityContext | nindent 8 }}
+      volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+  volumes:
+    - name: tmp
+      emptyDir: {}
+{{- end -}}
+
+{{- if .Values.migrationJob.enabled }}
+---
+# Schema migration runs BEFORE the new version rolls out (Argo CD PreSync
+# hook). If it fails, the sync stops and the old version keeps serving.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}-migrate
+  labels:
+    {{- include "ms.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    helm.sh/hook: pre-install,pre-upgrade
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 86400
+  template:
+    {{- include "ms.jobPod" (list . .Values.migrationJob.command) | nindent 4 }}
+{{- end }}
+
+{{- range .Values.cronJobs }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $name }}-{{ .name }}
+  labels:
+    {{- include "ms.labels" $ | nindent 4 }}
+spec:
+  schedule: {{ .schedule | quote }}
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 3600
+      template:
+        {{- include "ms.jobPod" (list $ .command) | nindent 8 }}
+{{- end }}

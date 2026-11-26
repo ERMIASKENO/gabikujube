@@ -1,0 +1,115 @@
+# Argo CD (argo/argo-cd Helm chart) - installed once by
+# scripts/bootstrap/bootstrap-cluster.sh, then it manages itself and everything else.
+# Pull model: Argo CD runs inside each cluster and pulls from Git, so CI never
+# needs credentials to the (private) Kubernetes API.
+global:
+  domain: argocd.internal.example.com
+
+redis-ha:
+  enabled: true          # HA mode for prod
+
+controller:
+  replicas: 1            # sharded by cluster; one cluster per Argo CD here
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+
+server:
+  replicas: 2
+  autoscaling: { enabled: true, minReplicas: 2 }
+
+repoServer:
+  replicas: 2
+  autoscaling: { enabled: true, minReplicas: 2 }
+
+applicationSet:
+  replicas: 2
+
+configs:
+  params:
+    server.insecure: false
+    application.namespaces: argocd
+  cm:
+    admin.enabled: false                     # SSO only
+    exec.enabled: false
+    statusbadge.enabled: true
+    kustomize.buildOptions: --enable-helm --load-restrictor LoadRestrictionsNone
+    # Entra ID SSO (OIDC). Group claims map to RBAC roles below.
+    oidc.config: |
+      name: Entra ID
+      issuer: https://login.microsoftonline.com/<tenant-id>/v2.0
+      clientID: <argocd-app-registration-client-id>
+      clientSecret: $oidc.azure.clientSecret
+      requestedIDTokenClaims:
+        groups:
+          essential: true
+      requestedScopes: [openid, profile, email]
+    # App-of-apps: make the parent wait for child Applications to be Healthy
+    # (Argo CD stopped assessing Application health by default in 1.8).
+    resource.customizations.health.argoproj.io_Application: |
+      hs = {}
+      hs.status = "Progressing"
+      hs.message = ""
+      if obj.status ~= nil and obj.status.health ~= nil then
+        hs.status = obj.status.health.status
+        if obj.status.health.message ~= nil then hs.message = obj.status.health.message end
+      end
+      return hs
+    # Don't let Argo CD fight the controllers that legitimately mutate objects
+    resource.customizations.ignoreDifferences.admissionregistration.k8s.io_MutatingWebhookConfiguration: |
+      jqPathExpressions:
+        - '.webhooks[]?.clientConfig.caBundle'
+  rbac:
+    policy.default: role:readonly
+    scopes: "[groups]"
+    policy.csv: |
+      # platform team: everything
+      g, <entra-group-id-platform>, role:admin
+      # app teams: sync/rollback their own apps, never edit platform
+      p, role:shop-dev, applications, get,  shop/*, allow
+      p, role:shop-dev, applications, sync, shop/*, allow
+      p, role:shop-dev, applications, action/argoproj.io/Rollout/*, shop/*, allow
+      g, <entra-group-id-shop-devs>, role:shop-dev
+
+notifications:
+  enabled: true
+  secret:
+    create: false           # argocd-notifications-secret synced from Key Vault by ESO
+  notifiers:
+    service.webhook.github-dispatch: |
+      url: https://api.github.com
+      headers:
+        - name: Authorization
+          value: Bearer $github-dispatch-token
+        - name: Accept
+          value: application/vnd.github+json
+    service.teams: |
+      recipientUrls:
+        platform: $teams-platform-webhook
+  templates:
+    # Closes the loop with CI: GitHub runs post-deploy verification + records
+    # the deployment (DORA metrics) after Argo CD finishes a sync.
+    template.app-deployed: |
+      webhook:
+        github-dispatch:
+          method: POST
+          path: /repos/ERMIASKENO/gabikujube/dispatches
+          body: |
+            {"event_type": "argocd-sync-succeeded",
+             "client_payload": {"app": "{{.app.metadata.name}}",
+                                "env": "{{index .app.metadata.labels "env"}}",
+                                "revision": "{{.app.status.sync.revision}}"}}
+      teams:
+        title: "{{.app.metadata.name}} deployed"
+        text: "Revision {{.app.status.sync.revision}} is healthy."
+    template.app-degraded: |
+      teams:
+        title: "{{.app.metadata.name}} is DEGRADED"
+        text: "{{.app.status.health.message}}"
+  triggers:
+    trigger.on-deployed: |
+      - when: app.status.operationState != nil and app.status.operationState.phase in ['Succeeded'] and app.status.health.status == 'Healthy'
+        oncePer: app.status.sync.revision
+        send: [app-deployed]
+    trigger.on-health-degraded: |
+      - when: app.status.health.status == 'Degraded'
+        send: [app-degraded]

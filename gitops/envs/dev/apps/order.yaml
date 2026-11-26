@@ -1,0 +1,9 @@
+# Managed by CI: .github/workflows/promote.yml rewrites the image block.
+image:
+  repository: acrshopspheredev.azurecr.io/shopsphere/order
+  tag: "0f3c2a9"
+  digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+serviceAccount:
+  workloadIdentityClientId: "<order-client-id from terraform output workload_client_ids>"
+env:
+  SERVICEBUS_FQDN: sb-shopsphere-dev.servicebus.windows.net

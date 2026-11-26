@@ -1,0 +1,11 @@
+gateway:
+  enabled: true
+  paths: ["/api/users", "/.well-known"]
+env:
+  JWT_ISSUER: https://shop.example.com
+secretEnv:
+  - { name: JWT_PRIVATE_JWK, key: JWT_PRIVATE_JWK }
+externalSecret:
+  enabled: true
+  data:
+    - { secretKey: JWT_PRIVATE_JWK, remoteKey: user-jwt-signing-key }

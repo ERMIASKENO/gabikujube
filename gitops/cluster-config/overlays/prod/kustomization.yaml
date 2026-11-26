@@ -1,0 +1,60 @@
+# prod overlay: only the values that genuinely differ per environment.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+patches:
+  - target: { kind: Gateway, name: shop-gateway }
+    patch: |-
+      - op: replace
+        path: /spec/listeners/0/hostname
+        value: shop.example.com
+      - op: replace
+        path: /spec/infrastructure/annotations/service.beta.kubernetes.io~1azure-load-balancer-ipv4
+        value: 10.30.15.250
+  - target: { kind: Certificate, name: shop-tls }
+    patch: |-
+      - op: replace
+        path: /spec/dnsNames/0
+        value: shop.example.com
+  - target: { kind: RequestAuthentication, name: shop-jwt }
+    patch: |-
+      - op: replace
+        path: /spec/jwtRules/0/issuer
+        value: https://shop.example.com
+  - target: { kind: ClusterIssuer, name: letsencrypt }
+    patch: |-
+      - op: replace
+        path: /spec/acme/solvers/0/dns01/azureDNS/subscriptionID
+        value: 33333333-3333-3333-3333-333333333333
+      - op: replace
+        path: /spec/acme/solvers/0/dns01/azureDNS/managedIdentity/clientID
+        value: "<prod-cert-manager-client-id>"
+  - target: { kind: ClusterSecretStore, name: azure-keyvault }
+    patch: |-
+      - op: replace
+        path: /spec/provider/azurekv/vaultUrl
+        value: https://kv-shopsphereprod.vault.azure.net
+  - target: { kind: NetworkPolicy, name: allow-azure-paas }
+    patch: |-
+      - op: replace
+        path: /spec/egress/0/to/0/ipBlock/cidr
+        value: 10.30.16.0/24
+      - op: replace
+        path: /spec/egress/0/to/1/ipBlock/cidr
+        value: 10.30.18.0/24
+  - target: { kind: Telemetry, name: mesh-default }
+    patch: |-
+      - op: replace
+        path: /spec/tracing/0/randomSamplingPercentage
+        value: 5.0
+  - target: { kind: ResourceQuota, name: shop-quota }
+    patch: |-
+      - op: replace
+        path: /spec/hard/requests.cpu
+        value: "64"
+      - op: replace
+        path: /spec/hard/requests.memory
+        value: 128Gi

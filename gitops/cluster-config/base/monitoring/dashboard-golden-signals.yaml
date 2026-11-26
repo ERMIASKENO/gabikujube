@@ -1,0 +1,40 @@
+# Dashboards as code: the Grafana sidecar loads every ConfigMap labelled
+# grafana_dashboard=1. One dashboard, a "service" variable, four golden signals.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dashboard-golden-signals
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  golden-signals.json: |
+    {
+      "title": "ShopSphere - Golden Signals",
+      "uid": "shopsphere-golden",
+      "schemaVersion": 39,
+      "time": { "from": "now-1h", "to": "now" },
+      "templating": {
+        "list": [
+          {
+            "name": "service", "type": "query", "datasource": "Prometheus",
+            "query": "label_values(istio_requests_total{destination_workload_namespace=\"shop\"}, destination_workload)",
+            "refresh": 2, "includeAll": false
+          }
+        ]
+      },
+      "panels": [
+        { "type": "timeseries", "title": "Traffic (rps) by version", "gridPos": {"x":0,"y":0,"w":12,"h":8},
+          "targets": [{ "expr": "sum by (destination_version) (rate(istio_requests_total{reporter=\"destination\",destination_workload=\"$service\"}[1m]))" }] },
+        { "type": "timeseries", "title": "Error ratio (5xx) by version", "gridPos": {"x":12,"y":0,"w":12,"h":8},
+          "targets": [{ "expr": "sum by (destination_version) (rate(istio_requests_total{reporter=\"destination\",destination_workload=\"$service\",response_code=~\"5..\"}[1m])) / sum by (destination_version) (rate(istio_requests_total{reporter=\"destination\",destination_workload=\"$service\"}[1m]))" }] },
+        { "type": "timeseries", "title": "Latency p50 / p95 / p99 (ms)", "gridPos": {"x":0,"y":8,"w":12,"h":8},
+          "targets": [
+            { "expr": "histogram_quantile(0.50, sum by (le) (rate(istio_request_duration_milliseconds_bucket{reporter=\"destination\",destination_workload=\"$service\"}[5m])))", "legendFormat": "p50" },
+            { "expr": "histogram_quantile(0.95, sum by (le) (rate(istio_request_duration_milliseconds_bucket{reporter=\"destination\",destination_workload=\"$service\"}[5m])))", "legendFormat": "p95" },
+            { "expr": "histogram_quantile(0.99, sum by (le) (rate(istio_request_duration_milliseconds_bucket{reporter=\"destination\",destination_workload=\"$service\"}[5m])))", "legendFormat": "p99" }
+          ] },
+        { "type": "timeseries", "title": "Saturation: CPU vs request", "gridPos": {"x":12,"y":8,"w":12,"h":8},
+          "targets": [{ "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"shop\",pod=~\"$service-.*\",container=\"app\"}[5m])) / sum(kube_pod_container_resource_requests{namespace=\"shop\",pod=~\"$service-.*\",container=\"app\",resource=\"cpu\"})" }] }
+      ]
+    }

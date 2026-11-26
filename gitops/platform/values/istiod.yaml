@@ -1,0 +1,29 @@
+pilot:
+  autoscaleEnabled: true
+  autoscaleMin: 2
+  resources:
+    requests: { cpu: 200m, memory: 512Mi }
+  cni:
+    enabled: true
+  env:
+    ENABLE_NATIVE_SIDECARS: "true"          # Envoy as a K8s native sidecar: Jobs complete, ordered startup/shutdown
+    PILOT_JWT_ENABLE_REMOTE_JWKS: "envoy"   # gateway fetches JWKS through the mesh (mTLS), not istiod
+global:
+  proxy:
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { memory: 256Mi }
+meshConfig:
+  accessLogFile: /dev/stdout
+  accessLogEncoding: JSON
+  enableTracing: true
+  defaultConfig:
+    holdApplicationUntilProxyStarts: true
+    tracing: {}
+  outboundTrafficPolicy:
+    mode: REGISTRY_ONLY                     # egress only to known services / ServiceEntries
+  extensionProviders:
+    - name: otel-tracing
+      opentelemetry:
+        service: alloy.monitoring.svc.cluster.local
+        port: 4317

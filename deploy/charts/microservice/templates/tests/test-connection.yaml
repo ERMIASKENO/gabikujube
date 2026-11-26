@@ -1,0 +1,30 @@
+# `helm test <release>`: in-cluster smoke check after an install/upgrade.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "ms.name" . }}-test
+  labels:
+    app.kubernetes.io/name: {{ include "ms.name" . }}-test
+    app.kubernetes.io/component: rollout-analysis
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    argocd.argoproj.io/hook: Skip
+spec:
+  restartPolicy: Never
+  serviceAccountName: rollout-analysis
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 100
+    seccompProfile: { type: RuntimeDefault }
+  containers:
+    - name: curl
+      image: curlimages/curl:8.11.1
+      args: ["-fsS", "--retry", "5", "--retry-all-errors", "http://{{ include "ms.name" . }}:8080{{ .Values.probes.liveness.path }}"]
+      resources:
+        requests: { cpu: 10m, memory: 16Mi }
+        limits: { memory: 32Mi }
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities: { drop: ["ALL"] }

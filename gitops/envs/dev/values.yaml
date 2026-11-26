@@ -1,0 +1,15 @@
+# dev: fast feedback - single replicas, short canaries, spot tolerated
+autoscaling:
+  hpa: { minReplicas: 1, maxReplicas: 3 }
+rollout:
+  canary:
+    steps:
+      - setWeight: 50
+      - pause: { duration: 30s }
+      - setWeight: 100
+  blueGreen:
+    autoPromotionEnabled: true
+    scaleDownDelaySeconds: 30
+    previewReplicaCount: 1
+tolerations:
+  - { key: kubernetes.azure.com/scalesetpriority, operator: Equal, value: spot, effect: NoSchedule }

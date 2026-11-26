@@ -1,0 +1,11 @@
+admissionController:
+  replicas: 3                 # webhook must be HA or it blocks every pod create
+backgroundController:
+  replicas: 2
+config:
+  webhooks:
+    - namespaceSelector:
+        matchExpressions:
+          - key: kubernetes.io/metadata.name
+            operator: NotIn
+            values: [kube-system, kyverno]

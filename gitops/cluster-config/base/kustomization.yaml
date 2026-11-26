@@ -1,0 +1,25 @@
+# Cluster-wide configuration as plain YAML + Kustomize overlays.
+# Rule of thumb used in this repo:
+#   Helm      -> packaging something templated and reused N times (our services, 3rd-party charts)
+#   Kustomize -> one-off cluster config that differs slightly per environment
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: shopsphere-platform
+    includeSelectors: false
+
+resources:
+  - namespaces.yaml
+  - scheduling.yaml
+  - network-policies.yaml
+  - istio/mesh-policies.yaml
+  - istio/egress.yaml
+  - gateway/gateway.yaml
+  - gateway/tls-and-auth.yaml
+  - rollouts/analysis.yaml
+  - secrets/cluster-secret-store.yaml
+  - policies/kyverno.yaml
+  - monitoring/scrape-and-rules.yaml
+  - monitoring/dashboard-golden-signals.yaml

@@ -1,0 +1,63 @@
+# Closes the GitOps loop: Argo CD Notifications sends a repository_dispatch
+# when an app finished syncing and is Healthy. We then:
+#   - run smoke tests against the real public endpoint (through Front Door)
+#   - record a GitHub Deployment (environment history + DORA metrics:
+#     deployment frequency, lead time for changes)
+name: post-deploy
+
+on:
+  repository_dispatch:
+    types: [argocd-sync-succeeded]
+
+permissions:
+  contents: read
+  deployments: write
+
+concurrency:
+  group: post-deploy-${{ github.event.client_payload.env }}-${{ github.event.client_payload.app }}
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      APP: ${{ github.event.client_payload.app }}
+      ENV_NAME: ${{ github.event.client_payload.env }}
+      REVISION: ${{ github.event.client_payload.revision }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate payload
+        run: |
+          [[ "${ENV_NAME}" =~ ^(dev|staging|prod)$ ]] || { echo "bad env"; exit 1; }
+          [[ "${APP}" =~ ^[a-z0-9-]{1,40}$ ]] || { echo "bad app"; exit 1; }
+          [[ "${REVISION}" =~ ^[0-9a-f]{7,40}$ ]] || { echo "bad revision"; exit 1; }
+      - name: Smoke test public endpoint
+        run: |
+          case "${ENV_NAME}" in
+            prod) base="https://shop.example.com" ;;
+            *)    base="https://${ENV_NAME}.shop.example.com" ;;
+          esac
+          scripts/ops/smoke-test.sh --base-url "${base}"
+      - name: Record deployment
+        if: always()
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          OUTCOME: ${{ job.status }}
+        with:
+          script: |
+            const { APP, ENV_NAME, REVISION, OUTCOME } = process.env;
+            const dep = await github.rest.repos.createDeployment({
+              ...context.repo, ref: REVISION, environment: ENV_NAME,
+              auto_merge: false, required_contexts: [], description: `${APP} via Argo CD`,
+              payload: { app: APP },
+            });
+            await github.rest.repos.createDeploymentStatus({
+              ...context.repo, deployment_id: dep.data.id,
+              state: OUTCOME === 'success' ? 'success' : 'failure',
+              log_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            });
+            const commit = await github.rest.repos.getCommit({ ...context.repo, ref: REVISION });
+            const leadMinutes = Math.round((Date.now() - new Date(commit.data.commit.committer.date)) / 60000);
+            core.summary.addHeading(`${APP} -> ${ENV_NAME}`).addRaw(`Lead time for change: ${leadMinutes} min`).write();

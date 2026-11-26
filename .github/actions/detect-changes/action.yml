@@ -1,0 +1,48 @@
+# Composite action: which services changed? Outputs a JSON array for a matrix.
+# Shared build inputs (golden-path workflow, chart) => rebuild everything.
+name: detect-changes
+description: Detect changed services under apps/ and emit a JSON matrix
+outputs:
+  services:
+    description: JSON array of service names
+    value: ${{ steps.detect.outputs.services }}
+  any:
+    description: "true if at least one service changed"
+    value: ${{ steps.detect.outputs.any }}
+runs:
+  using: composite
+  steps:
+    - id: detect
+      shell: bash
+      env:
+        EVENT: ${{ github.event_name }}
+        PR_BASE: ${{ github.event.pull_request.base.sha }}
+        MQ_BASE: ${{ github.event.merge_group.base_sha }}
+        PUSH_BEFORE: ${{ github.event.before }}
+      run: |
+        set -euo pipefail
+        case "${EVENT}" in
+          pull_request) base="${PR_BASE}" ;;
+          merge_group)  base="${MQ_BASE}" ;;
+          push)         base="${PUSH_BEFORE}" ;;
+          *)            base="" ;;
+        esac
+
+        all_services() { find apps -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort; }
+
+        # first push to a branch / manual run => build everything
+        if [[ -z "${base}" || "${base}" =~ ^0+$ ]] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+          services="$(all_services)"
+        else
+          changed="$(git diff --name-only "${base}" HEAD)"
+          if grep -qE '^(\.github/workflows/_build-service\.yml|\.github/actions/)' <<<"${changed}"; then
+            services="$(all_services)"
+          else
+            services="$(grep -oE '^apps/[^/]+/' <<<"${changed}" | cut -d/ -f2 | sort -u || true)"
+          fi
+        fi
+
+        json="$(jq -cR 'select(length>0)' <<<"${services}" | jq -cs .)"
+        echo "services=${json}" >>"${GITHUB_OUTPUT}"
+        echo "any=$([[ "${json}" != "[]" ]] && echo true || echo false)" >>"${GITHUB_OUTPUT}"
+        echo "Changed services: ${json}" >>"${GITHUB_STEP_SUMMARY}"

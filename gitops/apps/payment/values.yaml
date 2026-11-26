@@ -1,0 +1,15 @@
+# payment: BLUE-GREEN. Money movement => no mixed versions, atomic switch,
+# green is smoke-tested on the preview service, manual promotion.
+priorityClassName: shop-critical
+rollout:
+  strategy: blueGreen
+istio:
+  allowedCallers: [order]
+autoscaling:
+  hpa: { enabled: true, minReplicas: 3, maxReplicas: 10, targetCPUUtilizationPercentage: 60 }
+slo:
+  errorBudgetRatio: 0.001   # 99.9%
+  latencyP95Ms: 300
+resources:
+  requests: { cpu: 100m, memory: 32Mi }
+  limits: { memory: 64Mi }

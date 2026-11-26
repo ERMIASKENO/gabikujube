@@ -1,0 +1,12 @@
+crds:
+  enabled: true
+  keep: true
+replicaCount: 2
+podLabels:
+  azure.workload.identity/use: "true"   # DNS-01 against Azure DNS with workload identity
+serviceAccount:
+  name: cert-manager
+prometheus:
+  servicemonitor:
+    enabled: true
+    labels: { release: kube-prometheus-stack }

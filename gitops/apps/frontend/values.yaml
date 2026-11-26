@@ -1,0 +1,14 @@
+# frontend: static SPA on nginx. Canary because a broken UI is user-visible.
+gateway:
+  enabled: true
+  paths: ["/"]
+probes:
+  readiness: { path: /healthz, periodSeconds: 5, failureThreshold: 2 }
+resources:
+  requests: { cpu: 50m, memory: 32Mi }
+  limits: { memory: 64Mi }
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 101
+  fsGroup: 101
+  seccompProfile: { type: RuntimeDefault }

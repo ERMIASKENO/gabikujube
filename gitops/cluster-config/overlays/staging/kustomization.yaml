@@ -1,0 +1,60 @@
+# staging overlay: only the values that genuinely differ per environment.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+patches:
+  - target: { kind: Gateway, name: shop-gateway }
+    patch: |-
+      - op: replace
+        path: /spec/listeners/0/hostname
+        value: staging.shop.example.com
+      - op: replace
+        path: /spec/infrastructure/annotations/service.beta.kubernetes.io~1azure-load-balancer-ipv4
+        value: 10.20.15.250
+  - target: { kind: Certificate, name: shop-tls }
+    patch: |-
+      - op: replace
+        path: /spec/dnsNames/0
+        value: staging.shop.example.com
+  - target: { kind: RequestAuthentication, name: shop-jwt }
+    patch: |-
+      - op: replace
+        path: /spec/jwtRules/0/issuer
+        value: https://staging.shop.example.com
+  - target: { kind: ClusterIssuer, name: letsencrypt }
+    patch: |-
+      - op: replace
+        path: /spec/acme/solvers/0/dns01/azureDNS/subscriptionID
+        value: 66666666-6666-6666-6666-666666666666
+      - op: replace
+        path: /spec/acme/solvers/0/dns01/azureDNS/managedIdentity/clientID
+        value: "<staging-cert-manager-client-id>"
+  - target: { kind: ClusterSecretStore, name: azure-keyvault }
+    patch: |-
+      - op: replace
+        path: /spec/provider/azurekv/vaultUrl
+        value: https://kv-shopspherestaging.vault.azure.net
+  - target: { kind: NetworkPolicy, name: allow-azure-paas }
+    patch: |-
+      - op: replace
+        path: /spec/egress/0/to/0/ipBlock/cidr
+        value: 10.20.16.0/24
+      - op: replace
+        path: /spec/egress/0/to/1/ipBlock/cidr
+        value: 10.20.18.0/24
+  - target: { kind: Telemetry, name: mesh-default }
+    patch: |-
+      - op: replace
+        path: /spec/tracing/0/randomSamplingPercentage
+        value: 20.0
+  - target: { kind: ResourceQuota, name: shop-quota }
+    patch: |-
+      - op: replace
+        path: /spec/hard/requests.cpu
+        value: "24"
+      - op: replace
+        path: /spec/hard/requests.memory
+        value: 48Gi

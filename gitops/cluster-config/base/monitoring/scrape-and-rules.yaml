@@ -1,0 +1,78 @@
+# One PodMonitor scrapes every sidecar's merged endpoint (:15020): Envoy
+# golden-signal metrics + the app's own /metrics (Istio metrics merging), so
+# Prometheus never needs plaintext access to app ports under STRICT mTLS.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: envoy-stats
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  namespaceSelector:
+    any: true
+  selector:
+    matchExpressions:
+      - key: security.istio.io/tlsMode
+        operator: Exists
+  podMetricsEndpoints:
+    - path: /stats/prometheus
+      port: http-envoy-prom
+      interval: 30s
+      relabelings:
+        - action: keep
+          sourceLabels: [__meta_kubernetes_pod_container_name]
+          regex: istio-proxy
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: istiod
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  namespaceSelector:
+    matchNames: ["istio-system"]
+  selector:
+    matchLabels:
+      app: istiod
+  endpoints:
+    - port: http-monitoring
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: platform-delivery
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: delivery
+      rules:
+        - alert: RolloutAborted
+          expr: max by (namespace, name) (rollout_info{phase="Degraded"}) == 1
+          for: 1m
+          labels: { severity: ticket }
+          annotations:
+            summary: "Rollout {{ $labels.namespace }}/{{ $labels.name }} aborted (analysis failed) - traffic is back on stable"
+        - alert: ArgoCDAppOutOfSync
+          expr: max by (name) (argocd_app_info{sync_status="OutOfSync"}) == 1
+          for: 30m
+          labels: { severity: ticket }
+          annotations:
+            summary: "Argo CD app {{ $labels.name }} out of sync for 30m (drift or failed sync)"
+        - alert: ArgoCDAppDegraded
+          expr: max by (name) (argocd_app_info{health_status="Degraded"}) == 1
+          for: 5m
+          labels: { severity: page }
+        - alert: CertificateExpiringSoon
+          expr: certmanager_certificate_expiration_timestamp_seconds - time() < 14 * 24 * 3600
+          for: 1h
+          labels: { severity: ticket }
+        - alert: ExternalSecretSyncFailing
+          expr: sum by (name, namespace) (externalsecret_status_condition{condition="Ready",status="False"}) > 0
+          for: 15m
+          labels: { severity: ticket }

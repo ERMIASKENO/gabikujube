@@ -1,0 +1,6 @@
+# istio-cni sets up the traffic redirect on the node, so app pods need no
+# privileged istio-init container => namespaces can enforce PSA "restricted".
+# AKS + Azure CNI powered by Cilium: istio-cni runs chained after Cilium.
+cni:
+  chained: true
+  excludeNamespaces: [kube-system, istio-system]

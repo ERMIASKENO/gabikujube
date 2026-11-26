@@ -1,0 +1,129 @@
+# Entry point for every PR, merge-queue run and push to main.
+#   PR / merge queue : lint + test + build (no push) + scan + platform validation
+#   push to main     : the above, then push signed images to dev ACR and promote to dev
+# Only changed services are built (monorepo change detection).
+#
+# Simulation mode: until the repo variable ACR_DEV_LOGIN_SERVER is set, nothing
+# is pushed or promoted - every build, test, scan and validation still runs.
+name: ci
+
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      services: ${{ steps.detect.outputs.services }}
+      any-service: ${{ steps.detect.outputs.any }}
+      platform: ${{ steps.filter.outputs.platform }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: detect
+        uses: ./.github/actions/detect-changes
+      - id: filter
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: |
+            platform:
+              - 'deploy/**'
+              - 'gitops/**'
+              - 'scripts/ops/render-cluster-apps.sh'
+              - 'scripts/ci/**'
+
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: actionlint (workflow syntax, expression injection, shellcheck of run blocks)
+        env:
+          ACTIONLINT_VERSION: 1.7.7
+        run: |
+          bash <(curl -fsSL "https://raw.githubusercontent.com/rhysd/actionlint/v${ACTIONLINT_VERSION}/scripts/download-actionlint.bash") "${ACTIONLINT_VERSION}"
+          ./actionlint -color
+      - name: shellcheck
+        run: |
+          mapfile -t files < <(git ls-files '*.sh')
+          shellcheck --severity=style --external-sources "${files[@]}"
+      - name: yamllint
+        run: pipx run yamllint -c .yamllint.yaml .
+      - name: bash script tests (bats)
+        run: |
+          sudo apt-get install -y --no-install-recommends bats >/dev/null
+          bats scripts/tests
+
+  build:
+    needs: changes
+    if: needs.changes.outputs.any-service == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.changes.outputs.services) }}
+    uses: ./.github/workflows/_build-service.yml
+    with:
+      service: ${{ matrix.service }}
+      push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.ACR_DEV_LOGIN_SERVER != '' }}
+    permissions:
+      contents: read
+      id-token: write          # OIDC -> Azure (ACR push) and Sigstore (keyless signing)
+      attestations: write      # SLSA build provenance
+      security-events: write   # Trivy SARIF -> code scanning
+      packages: read
+
+  platform-validate:
+    needs: changes
+    if: needs.changes.outputs.platform == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-k8s-tools
+      - name: helm lint/template + kustomize build + kubeconform + generated-file drift
+        run: scripts/ci/validate-k8s.sh
+
+  promote-dev:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.build.result == 'success' && vars.ACR_DEV_LOGIN_SERVER != ''
+    uses: ./.github/workflows/promote.yml
+    with:
+      target: dev
+      source: ci-artifacts
+    permissions:
+      contents: read
+      id-token: write
+    secrets: inherit
+
+  # Single required status check for the ruleset. Path filtering and dynamic
+  # matrices mean individual job names come and go; this one always reports.
+  ci-gate:
+    if: always()
+    needs: [changes, lint, build, platform-validate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: All required jobs succeeded or were skipped
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "${NEEDS}" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "${NEEDS}" | jq -e 'all(.[]; .result == "success" or .result == "skipped")' >/dev/null

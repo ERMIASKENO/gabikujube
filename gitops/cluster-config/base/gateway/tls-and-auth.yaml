@@ -1,0 +1,75 @@
+# TLS for the Front Door -> gateway hop. Front Door validates the origin
+# certificate (certificate_name_check_enabled), so it must be a real cert.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: platform@example.com
+    privateKeySecretRef:
+      name: letsencrypt-account
+    solvers:
+      - dns01:
+          azureDNS:
+            subscriptionID: 00000000-0000-0000-0000-000000000000   # patched
+            resourceGroupName: rg-dns
+            hostedZoneName: example.com
+            environment: AzurePublicCloud
+            managedIdentity:
+              clientID: "<cert-manager-client-id>"                   # patched (workload identity)
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: shop-tls
+  namespace: istio-ingress
+spec:
+  secretName: shop-tls
+  dnsNames: ["shop.example.com"]                                     # patched
+  issuerRef:
+    kind: ClusterIssuer
+    name: letsencrypt
+  privateKey:
+    algorithm: ECDSA
+    rotationPolicy: Always
+---
+# API gateway auth at the edge: validate JWTs issued by the user service
+# BEFORE requests enter the mesh. Services receive verified claims.
+apiVersion: security.istio.io/v1
+kind: RequestAuthentication
+metadata:
+  name: shop-jwt
+  namespace: istio-ingress
+spec:
+  selector:
+    matchLabels:
+      gateway.networking.k8s.io/gateway-name: shop-gateway
+  jwtRules:
+    - issuer: https://shop.example.com                               # patched
+      audiences: ["shopsphere"]
+      jwksUri: http://user.shop.svc.cluster.local:8080/.well-known/jwks.json
+      forwardOriginalToken: true
+      outputClaimToHeaders:
+        - header: x-user-id
+          claim: sub
+---
+# Placing an order requires a valid token; browsing does not.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: require-jwt-for-orders
+  namespace: istio-ingress
+spec:
+  selector:
+    matchLabels:
+      gateway.networking.k8s.io/gateway-name: shop-gateway
+  action: DENY
+  rules:
+    - from:
+        - source:
+            notRequestPrincipals: ["*"]
+      to:
+        - operation:
+            paths: ["/api/orders*", "/api/users/me"]

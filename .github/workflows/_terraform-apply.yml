@@ -1,0 +1,58 @@
+# Applies the exact plan that reviewers saw in the plan job summary.
+# If state moved since the plan was made, Terraform rejects the stale plan.
+name: terraform-apply
+
+on:
+  workflow_call:
+    inputs:
+      env:
+        type: string
+        required: true
+      runner:
+        type: string
+        required: true
+
+permissions: {}
+
+jobs:
+  apply:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 60
+    environment: ${{ inputs.env }}          # required reviewers + wait timer (prod)
+    concurrency:
+      group: tf-apply-${{ inputs.env }}
+      cancel-in-progress: false             # never cancel a running apply
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      ENV: ${{ inputs.env }}
+      WORKDIR: infra/terraform/stacks/platform
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: plan
+        continue-on-error: true            # no artifact => plan had no changes
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tfplan-${{ inputs.env }}
+          path: ${{ env.WORKDIR }}
+      - if: steps.plan.outcome == 'success'
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.17.2
+          terraform_wrapper: false
+      - name: apply saved plan
+        if: steps.plan.outcome == 'success'
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          terraform init -backend-config="envs/${ENV}.backend.hcl"
+          terraform apply -lock-timeout=10m tfplan
+      - name: nothing to apply
+        if: steps.plan.outcome != 'success'
+        run: echo "No changes for ${ENV}." >>"${GITHUB_STEP_SUMMARY}"

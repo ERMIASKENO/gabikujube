@@ -1,0 +1,8 @@
+self-hosted-runner:
+  # self-hosted runners inside the VNets (infra) and GitHub-hosted runners
+  # with Azure private networking (azure-vnet-*), plus ARC in AKS
+  labels:
+    - infra-staging
+    - infra-prod
+    - azure-vnet-prod
+    - shopsphere-aks

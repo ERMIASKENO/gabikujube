@@ -1,0 +1,131 @@
+# Promotion = "move the SAME digest forward", never rebuild.
+#   dev     <- digests produced by CI on main (artifacts)
+#   staging <- whatever is currently in gitops/envs/dev
+#   prod    <- whatever is currently in gitops/envs/staging
+#
+# 1. verify signature of the source image (only our pipeline's images move)
+# 2. copy image + signatures/attestations to the target env's ACR (oras cp -r)
+# 3. change Git (the desired state), never the cluster: Argo CD does the deploy
+#      dev:            GitOps bot commits directly (ruleset bypass actor)
+#      staging / prod: GitOps bot opens a PR; CODEOWNERS (release-managers)
+#                      approve; environment protection adds a wait timer
+name: promote
+run-name: promote ${{ inputs.services || 'built services' }} -> ${{ inputs.target }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        type: choice
+        options: [staging, prod]
+        required: true
+      services:
+        description: Comma-separated services, or "all"
+        type: string
+        default: all
+  workflow_call:
+    inputs:
+      target:
+        type: string
+        required: true
+      source:
+        type: string
+        default: ci-artifacts
+      services:
+        type: string
+        default: all
+
+permissions:
+  contents: read
+
+concurrency:
+  group: promote-${{ inputs.target }}
+  cancel-in-progress: false   # never interrupt a half-done promotion
+
+jobs:
+  plan:
+    if: vars.ACR_DEV_LOGIN_SERVER != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      items: ${{ steps.items.outputs.items }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - if: inputs.source == 'ci-artifacts'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: digest-*
+          path: digests
+          merge-multiple: true
+
+      - id: items
+        name: Build promotion list
+        env:
+          TARGET: ${{ inputs.target }}
+          SERVICES: ${{ inputs.services || 'all' }}
+          SOURCE: ${{ inputs.source || 'git' }}
+        run: scripts/ci/promotion-plan.sh >>"${GITHUB_OUTPUT}"
+
+  copy-image:
+    needs: plan
+    if: needs.plan.outputs.items != '[]' && inputs.target != 'dev'
+    runs-on: ${{ inputs.target == 'prod' && 'azure-vnet-prod' || 'ubuntu-24.04' }}
+    timeout-minutes: 15
+    environment: ${{ inputs.target }}       # approval gate + env-scoped OIDC identity
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      matrix:
+        item: ${{ fromJSON(needs.plan.outputs.items) }}
+    env:
+      SRC: ${{ vars.ACR_SOURCE_LOGIN_SERVER }}/shopsphere/${{ matrix.item.service }}@${{ matrix.item.digest }}
+      DST: ${{ vars.ACR_LOGIN_SERVER }}/shopsphere/${{ matrix.item.service }}:${{ matrix.item.tag }}
+    steps:
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab # v4.1.4
+      - uses: oras-project/setup-oras@ac735097e22fe643015b0d19645f7c9a69942128 # v2.0.4
+      - name: Login to source and target registries
+        run: |
+          az acr login --name "${SRC%%.*}"
+          az acr login --name "${DST%%.*}"
+      - name: Verify the image was signed by our build workflow on main
+        run: |
+          cosign verify "${SRC}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/_build-service.yml@refs/heads/main" \
+            >/dev/null
+      - name: Copy image with its signature, SBOM and provenance (same digest)
+        run: oras cp --recursive "${SRC}" "${DST}"
+
+  update-gitops:
+    needs: [plan, copy-image]
+    if: always() && needs.plan.outputs.items != '[]' && (needs.copy-image.result == 'success' || needs.copy-image.result == 'skipped')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      # GitHub App token instead of GITHUB_TOKEN: PRs/pushes made with
+      # GITHUB_TOKEN don't trigger workflows (required checks would never run),
+      # and the App can be a narrowly-scoped ruleset bypass actor for dev.
+      - id: app
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        with:
+          app-id: ${{ vars.GITOPS_APP_ID }}
+          private-key: ${{ secrets.GITOPS_APP_PRIVATE_KEY }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ steps.app.outputs.token }}
+      - name: Bump image digests in gitops/envs/${{ inputs.target }}
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          TARGET: ${{ inputs.target }}
+          ITEMS: ${{ needs.plan.outputs.items }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: scripts/ci/bump-gitops.sh

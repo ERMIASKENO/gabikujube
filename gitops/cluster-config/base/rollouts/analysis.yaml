@@ -1,0 +1,121 @@
+# Shared analysis used by every canary / blue-green. Queries Istio metrics,
+# so the same template works for Go, Node, Python and Java services.
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterAnalysisTemplate
+metadata:
+  name: success-rate
+spec:
+  args:
+    - name: service
+    - name: namespace
+  metrics:
+    - name: success-rate
+      interval: 1m
+      count: 0                # run for the whole background analysis
+      failureLimit: 2         # 2 bad minutes => abort + automatic rollback
+      # No traffic yet => NaN => inconclusive is not a failure
+      successCondition: len(result) == 0 || isNaN(result[0]) || result[0] >= 0.99
+      provider:
+        prometheus:
+          address: http://kube-prometheus-stack-prometheus.monitoring.svc:9090
+          query: |
+            sum(rate(istio_requests_total{reporter="destination",destination_service_name="{{args.service}}",destination_service_namespace="{{args.namespace}}",response_code!~"5.."}[2m]))
+            /
+            sum(rate(istio_requests_total{reporter="destination",destination_service_name="{{args.service}}",destination_service_namespace="{{args.namespace}}"}[2m]))
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterAnalysisTemplate
+metadata:
+  name: latency-p95
+spec:
+  args:
+    - name: service
+    - name: namespace
+  metrics:
+    - name: latency-p95-ms
+      interval: 1m
+      count: 0
+      failureLimit: 2
+      successCondition: len(result) == 0 || isNaN(result[0]) || result[0] <= 500
+      provider:
+        prometheus:
+          address: http://kube-prometheus-stack-prometheus.monitoring.svc:9090
+          query: |
+            histogram_quantile(0.95, sum by (le) (rate(istio_request_duration_milliseconds_bucket{reporter="destination",destination_service_name="{{args.service}}",destination_service_namespace="{{args.namespace}}"}[2m])))
+---
+# Blue-green pre-promotion gate: hit the preview (green) Service from inside
+# the mesh. Runs as a Job with a native-sidecar Envoy so mTLS works and the
+# Job still completes.
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterAnalysisTemplate
+metadata:
+  name: smoke-test
+spec:
+  args:
+    - name: url
+  metrics:
+    - name: smoke
+      count: 1
+      provider:
+        job:
+          metadata:
+            labels:
+              app.kubernetes.io/component: rollout-analysis
+          spec:
+            backoffLimit: 2
+            activeDeadlineSeconds: 300
+            template:
+              metadata:
+                labels:
+                  app.kubernetes.io/component: rollout-analysis
+              spec:
+                restartPolicy: Never
+                serviceAccountName: rollout-analysis
+                securityContext:
+                  runAsNonRoot: true
+                  runAsUser: 100
+                  seccompProfile: { type: RuntimeDefault }
+                containers:
+                  - name: smoke
+                    image: curlimages/curl:8.11.1
+                    args: ["-fsS", "--retry", "10", "--retry-delay", "3", "--retry-all-errors", "{{args.url}}"]
+                    resources:
+                      requests: { cpu: 10m, memory: 16Mi }
+                      limits: { memory: 32Mi }
+                    securityContext:
+                      allowPrivilegeEscalation: false
+                      readOnlyRootFilesystem: true
+                      capabilities: { drop: ["ALL"] }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rollout-analysis
+  namespace: shop
+automountServiceAccountToken: false
+---
+# The Gateway API traffic-router plugin edits HTTPRoute weights
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: argo-rollouts-gateway-api
+rules:
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["httproutes", "grpcroutes", "tcproutes"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: argo-rollouts-gateway-api
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: argo-rollouts-gateway-api
+subjects:
+  - kind: ServiceAccount
+    name: argo-rollouts
+    namespace: argo-rollouts

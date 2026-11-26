@@ -1,0 +1,67 @@
+{{- /*
+  One HTTPRoute serves BOTH north-south (parent: edge Gateway) and east-west
+  traffic (parent: the Service itself - Gateway API "GAMMA" mesh mode in Istio).
+  Argo Rollouts' Gateway API plugin rewrites the stable/canary weights here,
+  so a canary at 10% gets 10% of edge AND in-mesh traffic.
+*/ -}}
+{{- $name := include "ms.name" . -}}
+{{- $s := .Values.rollout.strategy -}}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "ms.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    {{- if .Values.gateway.enabled }}
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: {{ .Values.gateway.name }}
+      namespace: {{ .Values.gateway.namespace }}
+      sectionName: https
+    {{- end }}
+    - group: ""
+      kind: Service
+      name: {{ $name }}
+      port: 8080
+  rules:
+    {{- if eq $s "blueGreen" }}
+    # QA can hit green through the real edge before promotion
+    - matches:
+        - headers:
+            - name: x-shopsphere-preview
+              value: "true"
+      backendRefs:
+        - name: {{ $name }}-preview
+          port: 8080
+    {{- end }}
+    - matches:
+        {{- if .Values.gateway.paths }}
+        {{- range .Values.gateway.paths }}
+        - path:
+            type: PathPrefix
+            value: {{ . }}
+        {{- end }}
+        {{- else }}
+        - path:
+            type: PathPrefix
+            value: /
+        {{- end }}
+      timeouts:
+        request: {{ .Values.http.timeout }}
+      backendRefs:
+        {{- if eq $s "canary" }}
+        - name: {{ $name }}-stable
+          port: 8080
+          weight: 100
+        - name: {{ $name }}-canary
+          port: 8080
+          weight: 0
+        {{- else if eq $s "blueGreen" }}
+        - name: {{ $name }}-stable
+          port: 8080
+        {{- else }}
+        - name: {{ $name }}
+          port: 8080
+        {{- end }}

@@ -1,0 +1,60 @@
+# Long-term metrics: add remote_write to Azure Monitor managed Prometheus (drop-in).
+prometheus:
+  prometheusSpec:
+    replicas: 2
+    retention: 15d
+    retentionSize: 45GB
+    # pick up every ServiceMonitor/PodMonitor/PrometheusRule labelled release=kube-prometheus-stack
+    ruleSelectorNilUsesHelmValues: false
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: managed-csi-premium
+          accessModes: [ReadWriteOnce]
+          resources: { requests: { storage: 50Gi } }
+alertmanager:
+  alertmanagerSpec:
+    replicas: 2
+  config:
+    route:
+      receiver: teams
+      group_by: [alertname, service]
+      routes:
+        - matchers: ['severity="page"']
+          receiver: pagerduty
+          repeat_interval: 1h
+    receivers:
+      - name: teams
+        webhook_configs:
+          - url: http://prometheus-msteams.monitoring.svc:2000/alertmanager
+      - name: pagerduty
+        pagerduty_configs:
+          - routing_key_file: /etc/alertmanager/secrets/pagerduty/routing-key
+grafana:
+  replicas: 2
+  admin:
+    existingSecret: grafana-admin          # from Key Vault via ESO
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      searchNamespace: ALL
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      url: http://loki-gateway.monitoring.svc
+    - name: Tempo
+      type: tempo
+      url: http://tempo.monitoring.svc:3200
+      jsonData:
+        tracesToLogsV2: { datasourceUid: loki }
+        serviceMap: { datasourceUid: prometheus }
+  grafana.ini:
+    auth.azuread:
+      enabled: true
+      allow_sign_up: true
+      client_id: <grafana-app-client-id>
+      auth_url: https://login.microsoftonline.com/<tenant-id>/oauth2/v2.0/authorize
+      token_url: https://login.microsoftonline.com/<tenant-id>/oauth2/v2.0/token

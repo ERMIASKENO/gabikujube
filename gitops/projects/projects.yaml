@@ -1,0 +1,59 @@
+# AppProjects = guard-rails for what each Argo CD app may deploy and where.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: platform
+  namespace: argocd
+spec:
+  description: Cluster add-ons owned by the platform team
+  sourceRepos:
+    - https://github.com/ERMIASKENO/gabikujube.git
+    - https://istio-release.storage.googleapis.com/charts
+    - https://charts.jetstack.io
+    - https://charts.external-secrets.io
+    - https://argoproj.github.io/argo-helm
+    - https://prometheus-community.github.io/helm-charts
+    - https://grafana.github.io/helm-charts
+    - https://kyverno.github.io/kyverno/
+    - https://stakater.github.io/stakater-charts
+    - ghcr.io/actions/actions-runner-controller-charts
+    - https://github.com/kubernetes-sigs/gateway-api
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: "*"
+  clusterResourceWhitelist:
+    - group: "*"
+      kind: "*"
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: shop
+  namespace: argocd
+spec:
+  description: ShopSphere microservices
+  sourceRepos:
+    - https://github.com/ERMIASKENO/gabikujube.git
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: shop
+  # App teams cannot create cluster-scoped objects or weaken namespace guard-rails
+  clusterResourceWhitelist: []
+  namespaceResourceBlacklist:
+    - group: ""
+      kind: ResourceQuota
+    - group: ""
+      kind: LimitRange
+    - group: security.istio.io
+      kind: PeerAuthentication
+  orphanedResources:
+    warn: true
+  # Change freeze: no automated prod syncs Friday 16:00 -> Monday 06:00 UTC.
+  # Manual syncs (hotfixes) stay possible and are audited.
+  syncWindows:
+    - kind: deny
+      schedule: "0 16 * * 5"
+      duration: 62h
+      applications: ["*"]
+      manualSync: true
+      timeZone: UTC

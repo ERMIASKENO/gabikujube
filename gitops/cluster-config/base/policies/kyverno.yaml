@@ -1,0 +1,83 @@
+# Admission policies (Kyverno). Supply-chain rule: only images built by OUR
+# reusable workflow on main, signed keyless with GitHub OIDC, may run in shop.
+# The certificate identity of a reusable-workflow signature is the *called*
+# workflow (job_workflow_ref), so a fork or a copied workflow can't forge it.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-shopsphere-images
+  annotations:
+    policies.kyverno.io/title: Verify image signatures (Sigstore keyless)
+spec:
+  webhookTimeoutSeconds: 15
+  background: false
+  rules:
+    - name: cosign-keyless-github
+      match:
+        any:
+          - resources:
+              kinds: ["Pod"]
+              namespaces: ["shop"]
+      verifyImages:
+        - imageReferences: ["*.azurecr.io/shopsphere/*"]
+          failureAction: Enforce          # patched to Audit in dev
+          mutateDigest: true              # rewrite tag -> digest at admission
+          verifyDigest: true
+          required: true
+          attestors:
+            - entries:
+                - keyless:
+                    issuer: https://token.actions.githubusercontent.com
+                    subjectRegExp: "^https://github\\.com/ERMIASKENO/gabikujube/\\.github/workflows/_build-service\\.yml@refs/heads/main$"
+                    rekor:
+                      url: https://rekor.sigstore.dev
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: workload-hygiene
+spec:
+  background: true
+  rules:
+    - name: require-requests
+      match:
+        any:
+          - resources:
+              kinds: ["Pod"]
+              namespaces: ["shop"]
+      validate:
+        failureAction: Enforce
+        message: "CPU and memory requests are required (the scheduler and HPA depend on them)."
+        pattern:
+          spec:
+            containers:
+              - resources:
+                  requests:
+                    cpu: "?*"
+                    memory: "?*"
+    - name: disallow-latest-tag
+      match:
+        any:
+          - resources:
+              kinds: ["Pod"]
+              namespaces: ["shop"]
+      validate:
+        failureAction: Enforce
+        message: "Mutable :latest tags are not allowed; deploy by digest."
+        pattern:
+          spec:
+            containers:
+              - image: "!*:latest"
+    - name: allowed-registries
+      match:
+        any:
+          - resources:
+              kinds: ["Pod"]
+              namespaces: ["shop"]
+      validate:
+        failureAction: Enforce
+        message: "Images must come from the platform ACR (or the pinned curl image used by smoke tests)."
+        pattern:
+          spec:
+            containers:
+              - image: "*.azurecr.io/* | curlimages/curl:*"

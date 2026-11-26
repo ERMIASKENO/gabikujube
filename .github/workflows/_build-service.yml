@@ -1,0 +1,194 @@
+# Reusable "golden path" build for ANY service, whatever the language:
+# the Dockerfile's `test` stage is the contract (hermetic, same as local).
+#
+#   test stage -> runtime image -> Trivy scan -> SBOM -> push (by digest)
+#   -> cosign keyless signature -> SLSA provenance attestation
+#
+# Because signing happens inside THIS reusable workflow, the Sigstore
+# certificate identity is this file @ refs/heads/main. Kyverno in the cluster
+# only admits images with exactly that identity.
+name: build-service
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        type: string
+        required: true
+      push:
+        type: boolean
+        default: false
+      platforms:
+        type: string
+        default: linux/amd64
+    outputs:
+      digest:
+        description: Image digest (sha256:...)
+        value: ${{ jobs.build.outputs.digest }}
+
+permissions: {}
+
+jobs:
+  build:
+    name: ${{ inputs.service }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # Only publishing builds get the registry identity (separate from deploy identities)
+    environment: ${{ inputs.push && 'ci-publish' || '' }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      security-events: write
+      packages: read
+    outputs:
+      digest: ${{ steps.image.outputs.digest }}
+    env:
+      SERVICE: ${{ inputs.service }}
+      CONTEXT: apps/${{ inputs.service }}
+      IMAGE: ${{ vars.ACR_DEV_LOGIN_SERVER || 'local' }}/shopsphere/${{ inputs.service }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - if: contains(inputs.platforms, 'arm64')
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Unit tests (Dockerfile test stage)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ env.CONTEXT }}
+          target: test
+          push: false
+          cache-from: type=gha,scope=${{ inputs.service }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.service }}
+
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=sha,prefix=,format=short
+            type=ref,event=pr,prefix=pr-
+            type=semver,pattern={{version}}
+          labels: |
+            org.opencontainers.image.title=${{ inputs.service }}
+
+      - name: Azure login (OIDC, no secrets)
+        if: inputs.push
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: ACR login
+        if: inputs.push
+        run: az acr login --name "${IMAGE%%.*}"
+
+      - id: build
+        name: Build runtime image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ env.CONTEXT }}
+          target: runtime
+          platforms: ${{ inputs.platforms }}
+          push: ${{ inputs.push }}
+          load: ${{ !inputs.push }}        # PRs: load locally so Trivy can scan it
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: VERSION=${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=${{ inputs.service }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.service }}
+
+      - id: image
+        name: Resolve image reference
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          PUSHED: ${{ inputs.push }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          if [[ "${PUSHED}" == "true" ]]; then
+            ref="${IMAGE}@${DIGEST}"
+          else
+            ref="$(head -n1 <<<"${TAGS}")"
+          fi
+          echo "ref=${ref}" >>"${GITHUB_OUTPUT}"
+          echo "digest=${DIGEST}" >>"${GITHUB_OUTPUT}"
+
+      - name: Trivy vulnerability scan (fail on fixable HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.image.outputs.ref }}
+          format: sarif
+          output: trivy.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Upload scan to GitHub code scanning
+        if: always() && hashFiles('trivy.sarif') != ''
+        continue-on-error: true   # code scanning needs a public repo or GitHub Advanced Security
+        uses: github/codeql-action/upload-sarif@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
+        with:
+          sarif_file: trivy.sarif
+          category: trivy-${{ inputs.service }}
+
+      - name: SBOM (SPDX)
+        uses: anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56 # v0.24.4
+        with:
+          image: ${{ steps.image.outputs.ref }}
+          format: spdx-json
+          artifact-name: sbom-${{ inputs.service }}.spdx.json
+          upload-release-assets: false
+
+      - if: inputs.push
+        uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab # v4.1.4
+
+      - name: Sign image (keyless, GitHub OIDC -> Fulcio cert, logged in Rekor)
+        if: inputs.push
+        env:
+          REF: ${{ steps.image.outputs.ref }}
+        run: cosign sign --yes "${REF}"
+
+      - name: SLSA build provenance attestation
+        if: inputs.push
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Record digest for promotion
+        if: inputs.push
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAG: ${{ github.sha }}
+        run: |
+          mkdir -p digests
+          jq -n --arg s "${SERVICE}" --arg d "${DIGEST}" --arg t "${TAG:0:7}" \
+            '{service:$s, digest:$d, tag:$t}' >"digests/${SERVICE}.json"
+
+      - if: inputs.push
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: digest-${{ inputs.service }}
+          path: digests/${{ inputs.service }}.json
+          retention-days: 7
+
+      - name: Summary
+        env:
+          REF: ${{ steps.image.outputs.ref }}
+        run: |
+          {
+            echo "### ${SERVICE}"
+            echo "| | |"
+            echo "|---|---|"
+            echo "| image | \`${REF}\` |"
+            echo "| pushed | ${{ inputs.push }} |"
+          } >>"${GITHUB_STEP_SUMMARY}"

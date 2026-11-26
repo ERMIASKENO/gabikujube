@@ -1,0 +1,11 @@
+gateway:
+  enabled: true
+  paths: ["/api/cart"]
+istio:
+  allowedCallers: [order]
+secretEnv:
+  - { name: REDIS_PASSWORD, key: REDIS_PASSWORD }
+externalSecret:
+  enabled: true
+  data:
+    - { secretKey: REDIS_PASSWORD, remoteKey: cart-redis-password }

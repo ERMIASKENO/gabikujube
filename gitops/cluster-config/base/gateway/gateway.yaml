@@ -1,0 +1,91 @@
+# Edge Gateway (Kubernetes Gateway API, implemented by Istio). Replaces the
+# retired ingress-nginx pattern: typed routing, role separation (platform owns
+# the Gateway, app teams own HTTPRoutes), no annotation soup.
+#
+# Istio auto-deploys an Envoy Deployment + Service "shop-gateway-istio".
+# spec.infrastructure.annotations land on that Service, telling AKS to
+# create an INTERNAL Azure Standard LB with a static IP and a Private Link
+# Service that Front Door Premium connects to. No public IP on the cluster.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: shop-gateway
+  namespace: istio-ingress
+spec:
+  gatewayClassName: istio
+  infrastructure:
+    annotations:
+      service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+      service.beta.kubernetes.io/azure-load-balancer-ipv4: 10.0.15.250            # patched per env
+      service.beta.kubernetes.io/azure-pls-create: "true"
+      service.beta.kubernetes.io/azure-pls-name: pls-istio-ingress
+      service.beta.kubernetes.io/azure-pls-ip-configuration-subnet: snet-pls
+      service.beta.kubernetes.io/azure-pls-proxy-protocol: "false"
+  listeners:
+    - name: https
+      protocol: HTTPS
+      port: 443
+      hostname: shop.example.com                                                  # patched per env
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: shop-tls
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              shopsphere.io/tier: apps
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: shop-gateway-istio
+  namespace: istio-ingress
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: shop-gateway-istio
+  minReplicas: 3
+  maxReplicas: 15
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: shop-gateway-istio
+  namespace: istio-ingress
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      gateway.networking.k8s.io/gateway-name: shop-gateway
+---
+# Gateway pods may call into shop; nothing else may reach them except the LB
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway-ingress
+  namespace: istio-ingress
+spec:
+  podSelector:
+    matchLabels:
+      gateway.networking.k8s.io/gateway-name: shop-gateway
+  policyTypes: ["Ingress"]
+  ingress:
+    - ports:
+        - { port: 443, protocol: TCP }
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - { port: 15020, protocol: TCP }

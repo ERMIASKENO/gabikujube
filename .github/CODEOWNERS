@@ -1,0 +1,6 @@
+# Personal repo: you own everything. In an organisation this file maps paths
+# to teams, e.g.:
+#   /apps/payment/          @my-org/team-checkout
+#   /gitops/envs/prod/      @my-org/release-managers
+#   /infra/  /.github/      @my-org/platform
+*       @ERMIASKENO

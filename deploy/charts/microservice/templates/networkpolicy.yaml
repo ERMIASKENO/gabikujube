@@ -1,0 +1,41 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- /* L3/L4 allow-list (enforced by Cilium) underneath the Istio L7 policy:
+       defence in depth if a sidecar is ever bypassed. */ -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "ms.name" . }}
+  labels:
+    {{- include "ms.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "ms.selectorLabels" . | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        {{- range .Values.istio.allowedCallers }}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ . }}
+        {{- end }}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: rollout-analysis
+        {{- if .Values.gateway.enabled }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.gateway.namespace }}
+        {{- end }}
+      ports:
+        - port: http
+          protocol: TCP
+    # Prometheus scrapes the sidecar's merged metrics endpoint
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 15020
+          protocol: TCP
+{{- end }}

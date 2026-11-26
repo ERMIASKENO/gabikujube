@@ -1,0 +1,63 @@
+{{- if .Values.istio.enabled }}
+{{- $name := include "ms.name" . -}}
+{{- $ns := .Release.Namespace -}}
+{{- /* Resilience per backend host: mTLS, connection pools, outlier detection
+       (passive circuit breaking: eject pods returning consecutive 5xx). */ -}}
+{{- range (include "ms.backendServices" . | splitList ",") }}
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: {{ . }}
+  labels:
+    {{- include "ms.labels" $ | nindent 4 }}
+spec:
+  host: {{ . }}.{{ $ns }}.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+    loadBalancer:
+      simple: LEAST_REQUEST
+    connectionPool:
+      tcp:
+        maxConnections: 1000
+        connectTimeout: 2s
+      http:
+        http1MaxPendingRequests: 1024
+        idleTimeout: 60s
+    outlierDetection:
+      {{- toYaml $.Values.istio.outlierDetection | nindent 6 }}
+{{- end }}
+---
+# Zero-trust: only the listed workload identities (SPIFFE principals from
+# the mTLS certs) may call this service. The namespace has an allow-nothing
+# baseline, so anything not listed here is denied.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "ms.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "ms.selectorLabels" . | nindent 6 }}
+  action: ALLOW
+  rules:
+    {{- if or .Values.istio.allowedCallers .Values.gateway.enabled }}
+    - from:
+        - source:
+            principals:
+              {{- range .Values.istio.allowedCallers }}
+              - cluster.local/ns/{{ $ns }}/sa/{{ . }}
+              {{- end }}
+              {{- if .Values.gateway.enabled }}
+              - cluster.local/ns/{{ .Values.gateway.namespace }}/sa/{{ .Values.gateway.name }}-istio
+              {{- end }}
+    {{- end }}
+    # Argo Rollouts smoke-test / analysis Jobs
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/{{ $ns }}/sa/rollout-analysis
+{{- end }}

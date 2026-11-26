@@ -1,0 +1,16 @@
+{
+  "name": "@shopsphere/user",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "jose": "^6.0.0",
+    "prom-client": "^15.1.3"
+  }
+}

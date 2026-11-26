@@ -1,0 +1,92 @@
+{{- $name := include "ms.name" . -}}
+{{- if and .Values.autoscaling.hpa.enabled (not .Values.autoscaling.keda.enabled) }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "ms.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: {{ include "ms.workloadApiVersion" . }}
+    kind: {{ include "ms.workloadKind" . }}
+    name: {{ $name }}
+  minReplicas: {{ .Values.autoscaling.hpa.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.hpa.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.hpa.targetCPUUtilizationPercentage }}
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+    scaleDown:
+      stabilizationWindowSeconds: 300   # avoid flapping after a traffic spike
+      policies:
+        - type: Percent
+          value: 20
+          periodSeconds: 60
+{{- end }}
+{{- if .Values.autoscaling.keda.enabled }}
+{{- $sb := .Values.autoscaling.keda.serviceBus }}
+---
+# Event-driven autoscaling (AKS KEDA add-on): scale on Service Bus backlog,
+# down to zero when idle. KEDA manages an HPA under the hood.
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: {{ $name }}-servicebus
+  labels:
+    {{- include "ms.labels" . | nindent 4 }}
+spec:
+  podIdentity:
+    provider: azure-workload
+    identityId: {{ required "autoscaling.keda.serviceBus.identityClientId is required" $sb.identityClientId | quote }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "ms.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: {{ include "ms.workloadApiVersion" . }}
+    kind: {{ include "ms.workloadKind" . }}
+    name: {{ $name }}
+  minReplicaCount: {{ .Values.autoscaling.keda.minReplicas }}
+  maxReplicaCount: {{ .Values.autoscaling.keda.maxReplicas }}
+  pollingInterval: 15
+  cooldownPeriod: 300
+  triggers:
+    - type: azure-servicebus
+      metadata:
+        namespace: {{ $sb.namespace }}
+        topicName: {{ $sb.topic }}
+        subscriptionName: {{ $sb.subscription }}
+        messageCount: {{ $sb.messageCount | default "20" | quote }}
+      authenticationRef:
+        name: {{ $name }}-servicebus
+{{- end }}
+{{- if .Values.pdb.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "ms.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.pdb.maxUnavailable }}
+  unhealthyPodEvictionPolicy: AlwaysAllow   # don't let crash-looping pods block node drains
+  selector:
+    matchLabels:
+      {{- include "ms.selectorLabels" . | nindent 6 }}
+{{- end }}

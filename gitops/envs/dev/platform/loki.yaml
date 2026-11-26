@@ -1,0 +1,6 @@
+loki:
+  limits_config:
+    retention_period: 7d
+write: { replicas: 1 }
+read: { replicas: 1 }
+backend: { replicas: 1 }

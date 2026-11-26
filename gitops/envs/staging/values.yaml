@@ -1,0 +1,11 @@
+# staging: production-shaped, shorter pauses
+autoscaling:
+  hpa: { minReplicas: 2, maxReplicas: 6 }
+rollout:
+  canary:
+    steps:
+      - setWeight: 20
+      - pause: { duration: 1m }
+      - setWeight: 50
+      - pause: { duration: 2m }
+      - setWeight: 100

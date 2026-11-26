@@ -1,0 +1,3 @@
+reloader:
+  watchGlobally: true
+  reloadOnCreate: false

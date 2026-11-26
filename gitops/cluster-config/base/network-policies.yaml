@@ -1,0 +1,85 @@
+# Namespace baseline: deny everything, then allow only what the platform
+# needs. Per-service ingress allow-lists come from the Helm chart.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: shop
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: shop
+spec:
+  podSelector: {}
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-mesh
+  namespace: shop
+spec:
+  podSelector: {}
+  policyTypes: ["Egress"]
+  egress:
+    # pod-to-pod inside shop (Istio AuthorizationPolicy does the fine-grained L7 part)
+    - to:
+        - podSelector: {}
+    # sidecars -> istiod (xDS + CA)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: istio-system
+      ports:
+        - { port: 15012, protocol: TCP }
+        - { port: 15017, protocol: TCP }
+    # traces -> alloy (OTLP)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - { port: 4317, protocol: TCP }
+---
+# Azure PaaS over private endpoints + Entra ID token endpoint.
+# The private-endpoint CIDRs are patched per environment by the overlay.
+# For FQDN-level egress control use Cilium FQDN policies (ACNS) or Azure Firewall.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-azure-paas
+  namespace: shop
+spec:
+  podSelector: {}
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - ipBlock: { cidr: 10.0.16.0/24 }   # snet-pe (patched)
+        - ipBlock: { cidr: 10.0.18.0/24 }   # snet-postgres (patched)
+      ports:
+        - { port: 443, protocol: TCP }
+        - { port: 5432, protocol: TCP }
+        - { port: 5671, protocol: TCP }     # Service Bus AMQP
+        - { port: 10000, protocol: TCP }    # Azure Managed Redis
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+      ports:
+        - { port: 443, protocol: TCP }      # login.microsoftonline.com (workload identity)
