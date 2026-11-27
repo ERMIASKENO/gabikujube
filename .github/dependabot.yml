@@ -17,6 +17,11 @@ updates:
     cooldown: { default-days: 5 }
     groups:
       base-images: { patterns: ["*"], update-types: [minor, patch] }
+    ignore:
+      # maven:3.9-eclipse-temurin-21 is a floating tag (latest Maven 3.9 on
+      # JDK 21). Dependabot reads "-21" as a version and proposes JDK 26, which
+      # would not match the Java 21 runtime. JDK upgrades are done deliberately.
+      - dependency-name: "maven"
 
   - package-ecosystem: gomod
     directories: ["/apps/product-catalog", "/apps/payment", "/apps/shipping"]

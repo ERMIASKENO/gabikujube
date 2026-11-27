@@ -12,7 +12,7 @@ import com.azure.identity.DefaultAzureCredentialBuilder;
 import com.azure.messaging.servicebus.ServiceBusClientBuilder;
 import com.azure.messaging.servicebus.ServiceBusMessage;
 import com.azure.messaging.servicebus.ServiceBusSenderClient;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * Publishes domain events to the Service Bus topic `order-events`.
@@ -27,7 +27,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 public class EventPublisher implements DisposableBean {
 
     private static final Logger log = LoggerFactory.getLogger(EventPublisher.class);
-    private final ObjectMapper json = new ObjectMapper();
+    private final JsonMapper json = JsonMapper.builder().build(); // Jackson 3 (Spring Boot 4 default)
     private final ServiceBusSenderClient sender;
 
     public EventPublisher(@Value("${servicebus.fqdn:}") String fqdn, @Value("${servicebus.topic:order-events}") String topic) {
