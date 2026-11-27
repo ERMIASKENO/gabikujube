@@ -54,6 +54,15 @@ updates:
       providers: { patterns: ["*"], update-types: [minor, patch] }
     # Provider MAJOR upgrades (e.g. azurerm 4 -> 5) have breaking changes and
     # must move every module at once: done deliberately in a dedicated PR.
+    # For Terraform, Dependabot widens the version CONSTRAINT (~> 4.0 -> ~> 5.15)
+    # instead of bumping a version, so an update-types filter never matches.
+    # Explicit version ranges are what actually block the majors.
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
+      - dependency-name: "hashicorp/azurerm"
+        versions: [">= 5.0.0"]
+      - dependency-name: "azure/azapi"
+        versions: [">= 3.0.0"]
+      - dependency-name: "integrations/github"
+        versions: [">= 7.0.0"]
