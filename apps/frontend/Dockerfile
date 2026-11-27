@@ -14,7 +14,7 @@ RUN npm test
 
 FROM build AS test
 
-FROM nginxinc/nginx-unprivileged:1.30-alpine-slim AS runtime
+FROM nginxinc/nginx-unprivileged:1.31-alpine-slim AS runtime
 ARG VERSION=dev
 LABEL org.opencontainers.image.title="frontend" org.opencontainers.image.version="${VERSION}"
 COPY nginx.conf /etc/nginx/conf.d/default.conf

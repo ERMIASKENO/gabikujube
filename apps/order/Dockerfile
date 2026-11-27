@@ -6,7 +6,7 @@
 #     snapshot-deps / application) so a code change only rebuilds the small
 #     top layer -> faster pushes/pulls, better registry dedup
 #  4. distroless Java 21 runtime, non-root
-FROM maven:3.9-eclipse-temurin-21 AS deps
+FROM maven:3.9-eclipse-temurin-26 AS deps
 WORKDIR /build
 COPY pom.xml .
 RUN --mount=type=cache,target=/root/.m2 mvn -B -q dependency:go-offline
