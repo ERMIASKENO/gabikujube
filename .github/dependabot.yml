@@ -62,7 +62,7 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "hashicorp/azurerm"
         versions: [">= 5.0.0"]
-      - dependency-name: "azure/azapi"
+      - dependency-name: "Azure/azapi"
         versions: [">= 3.0.0"]
       - dependency-name: "integrations/github"
         versions: [">= 7.0.0"]
