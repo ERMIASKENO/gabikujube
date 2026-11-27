@@ -59,7 +59,8 @@ jobs:
         run: test "${RESULT}" = "success"
 
   dependency-review:
-    if: github.event_name == 'pull_request'
+    # Dependabot PRs get a restricted token and already carry advisory data
+    if: github.event_name == 'pull_request' && github.actor != 'dependabot[bot]'
     runs-on: ubuntu-24.04
     permissions:
       contents: read

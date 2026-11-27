@@ -7,8 +7,9 @@
 # ORGANIZATION. On a personal account, apply only the repository, ruleset and
 # environment resources (or create a free org and transfer the repo).
 #
-# Auth: a GitHub App installation (GITHUB_APP_ID / GITHUB_APP_INSTALLATION_ID /
-# GITHUB_APP_PEM_FILE) with org admin + repo admin permissions.
+# Auth: GITHUB_TOKEN from the environment. In CI that is a short-lived GitHub
+# App installation token (actions/create-github-app-token) with admin rights,
+# so no personal access token is ever stored.
 terraform {
   required_version = ">= 1.11"
   required_providers {
@@ -21,8 +22,7 @@ terraform {
 }
 
 provider "github" {
-  owner = var.org
-  app_auth {} # reads GITHUB_APP_* env vars
+  owner = var.org # token is read from the GITHUB_TOKEN environment variable
 }
 
 variable "org" {
@@ -76,7 +76,6 @@ resource "github_repository" "shopsphere" {
   squash_merge_commit_title   = "PR_TITLE"
   delete_branch_on_merge      = true
   allow_auto_merge            = true
-  vulnerability_alerts        = true
   web_commit_signoff_required = true
 
   security_and_analysis {
@@ -90,6 +89,11 @@ resource "github_repository" "shopsphere" {
       status = "enabled"
     }
   }
+}
+
+resource "github_repository_vulnerability_alerts" "shopsphere" {
+  repository = github_repository.shopsphere.name
+  enabled    = true
 }
 
 resource "github_team_repository" "platform" {

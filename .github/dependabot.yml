@@ -46,4 +46,9 @@ updates:
     directories: ["/infra/terraform/stacks/*", "/infra/terraform/modules/*"]
     schedule: { interval: weekly }
     groups:
-      providers: { patterns: ["*"] }
+      providers: { patterns: ["*"], update-types: [minor, patch] }
+    # Provider MAJOR upgrades (e.g. azurerm 4 -> 5) have breaking changes and
+    # must move every module at once: done deliberately in a dedicated PR.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
