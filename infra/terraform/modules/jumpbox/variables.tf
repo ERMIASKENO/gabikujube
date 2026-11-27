@@ -7,7 +7,7 @@ variable "admin_ssh_public_key" { type = string }
 
 variable "vm_size" {
   type    = string
-  default = "Standard_B2s"
+  default = "Standard_B2s_v2" # B-series v1 sizes are announced for retirement
 }
 
 variable "admin_group_object_ids" {

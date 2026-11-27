@@ -45,6 +45,7 @@ resource "azurerm_postgresql_flexible_server" "this" {
   }
 
   lifecycle {
+    prevent_destroy = true # holds customer data
     # Azure may swap primary/standby zones after a failover; don't fight it.
     ignore_changes = [zone, high_availability[0].standby_availability_zone]
   }
@@ -61,6 +62,7 @@ resource "azurerm_postgresql_flexible_server_database" "inventory" {
   }
 }
 
+# tflint-ignore: azurerm_resources_missing_prevent_destroy # derived value, regenerated on rotation
 resource "azurerm_key_vault_secret" "inventory_dsn" {
   name             = "inventory-database-url"
   key_vault_id     = var.key_vault_id
@@ -88,7 +90,7 @@ resource "azapi_resource" "redis" {
     properties = {
       minimumTlsVersion   = "1.2"
       highAvailability    = var.redis_ha ? "Enabled" : "Disabled"
-      publicNetworkAccess = "Disabled"
+      publicNetworkAccess = "Disabled" # reachable only via the private endpoint
     }
   }
   response_export_values = ["properties.hostName"]
@@ -117,6 +119,7 @@ resource "azapi_resource_action" "redis_keys" {
   sensitive_response_export_values = ["primaryKey"]
 }
 
+# tflint-ignore: azurerm_resources_missing_prevent_destroy # derived value, regenerated on rotation
 resource "azurerm_key_vault_secret" "redis_password" {
   name         = "cart-redis-password"
   key_vault_id = var.key_vault_id
@@ -155,8 +158,13 @@ resource "azurerm_servicebus_namespace" "this" {
   public_network_access_enabled = !var.servicebus_premium # private endpoints need Premium
   minimum_tls_version           = "1.2"
   tags                          = var.tags
+
+  lifecycle {
+    prevent_destroy = true # in-flight messages would be lost
+  }
 }
 
+# tflint-ignore: azurerm_resources_missing_prevent_destroy # namespace is protected; topic config is fully in code
 resource "azurerm_servicebus_topic" "order_events" {
   name                                    = "order-events"
   namespace_id                            = azurerm_servicebus_namespace.this.id

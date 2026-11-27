@@ -18,6 +18,10 @@ resource "azurerm_key_vault" "this" {
     bypass         = "AzureServices"
     ip_rules       = var.allowed_ip_ranges
   }
+
+  lifecycle {
+    prevent_destroy = true # deleting the vault loses every secret (purge protection keeps the name for 90 days)
+  }
 }
 
 resource "azurerm_private_endpoint" "kv" {
