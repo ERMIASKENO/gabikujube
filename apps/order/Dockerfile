@@ -19,7 +19,7 @@ RUN java -Djarmode=tools -jar target/app.jar extract --layers --launcher --desti
 # `mvn package` above already ran the unit tests; CI targets this stage name
 FROM build AS test
 
-FROM gcr.io/distroless/java21-debian12:nonroot AS runtime
+FROM gcr.io/distroless/java21-debian13:nonroot AS runtime
 ARG VERSION=dev
 LABEL org.opencontainers.image.title="order" org.opencontainers.image.version="${VERSION}"
 WORKDIR /app

@@ -26,7 +26,7 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/app .
 
 # distroless/static: CA certs + tzdata + /etc/passwd with uid 65532 (nonroot)
-FROM gcr.io/distroless/static-debian12:nonroot AS runtime
+FROM gcr.io/distroless/static-debian13:nonroot AS runtime
 ARG VERSION=dev
 LABEL org.opencontainers.image.title="product-catalog" \
       org.opencontainers.image.source="https://github.com/ERMIASKENO/gabikujube" \

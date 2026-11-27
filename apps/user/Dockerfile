@@ -15,7 +15,7 @@ RUN npm test
 FROM deps AS prod-deps
 RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev --ignore-scripts
 
-FROM gcr.io/distroless/nodejs${NODE_VERSION}-debian12:nonroot AS runtime
+FROM gcr.io/distroless/nodejs${NODE_VERSION}-debian13:nonroot AS runtime
 ARG VERSION=dev
 ENV NODE_ENV=production APP_VERSION=${VERSION}
 LABEL org.opencontainers.image.title="user" org.opencontainers.image.version="${VERSION}"
