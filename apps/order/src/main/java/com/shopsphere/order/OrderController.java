@@ -44,7 +44,7 @@ public class OrderController {
 
     @ExceptionHandler(IllegalStateException.class)
     ResponseEntity<Map<String, String>> badState(IllegalStateException e) {
-        return ResponseEntity.unprocessableEntity().body(Map.of("error", e.getMessage()));
+        return ResponseEntity.status(422).body(Map.of("error", e.getMessage())); // 422 Unprocessable Content
     }
 
     /** Downstream 409 (out of stock) etc. is surfaced as-is; 5xx becomes 502. */
