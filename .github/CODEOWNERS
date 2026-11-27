@@ -4,3 +4,4 @@
 #   /gitops/envs/prod/      @my-org/release-managers
 #   /infra/  /.github/      @my-org/platform
 *       @ERMIASKENO
+/.trivyignore @ERMIASKENO

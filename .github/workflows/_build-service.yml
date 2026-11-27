@@ -123,15 +123,18 @@ jobs:
           echo "ref=${ref}" >>"${GITHUB_OUTPUT}"
           echo "digest=${DIGEST}" >>"${GITHUB_OUTPUT}"
 
-      - name: Trivy vulnerability scan (fail on fixable HIGH/CRITICAL)
+      # 1) Report: full SARIF for the Security tab. Never fails the job.
+      - name: Trivy scan -> SARIF report
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ steps.image.outputs.ref }}
           format: sarif
           output: trivy.sarif
           severity: CRITICAL,HIGH
+          limit-severities-for-sarif: true
           ignore-unfixed: true
-          exit-code: "1"
+          exit-code: "0"
+          trivyignores: .trivyignore
 
       - name: Upload scan to GitHub code scanning
         if: always() && hashFiles('trivy.sarif') != ''
@@ -140,6 +143,22 @@ jobs:
         with:
           sarif_file: trivy.sarif
           category: trivy-${{ inputs.service }}
+
+      # 2) Gate: human-readable table in the log, fails on fixable HIGH/CRITICAL.
+      #    Reuses the binary and DB downloaded by step 1.
+      - name: Trivy gate (fail on fixable HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_SKIP_DB_UPDATE: "true"
+          TRIVY_SKIP_JAVA_DB_UPDATE: "true"
+        with:
+          image-ref: ${{ steps.image.outputs.ref }}
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+          skip-setup-trivy: true
+          trivyignores: .trivyignore
 
       - name: SBOM (SPDX)
         uses: anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56 # v0.24.4

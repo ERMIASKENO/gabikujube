@@ -1,0 +1,5 @@
+# Accepted vulnerabilities, one CVE ID per line, each with a reason and an
+# expiry so the exception gets re-reviewed. Changes need CODEOWNERS approval.
+#
+# Example:
+# CVE-2026-12345  # no fix upstream for libfoo in distroless; re-check 2027-01-31
