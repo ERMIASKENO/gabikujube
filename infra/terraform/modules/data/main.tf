@@ -86,8 +86,9 @@ resource "azapi_resource" "redis" {
   body = {
     sku = { name = var.redis_sku }
     properties = {
-      minimumTlsVersion = "1.2"
-      highAvailability  = var.redis_ha ? "Enabled" : "Disabled"
+      minimumTlsVersion   = "1.2"
+      highAvailability    = var.redis_ha ? "Enabled" : "Disabled"
+      publicNetworkAccess = "Disabled"
     }
   }
   response_export_values = ["properties.hostName"]
